@@ -98,28 +98,30 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 		needVerifyInstruction := ""
 		missingVerify := false
 		lintPolicy := ""
-		if cfg.mode == "build" {
-			if active, ok, err := readActiveTask(planPath); err == nil && ok {
-				task = active
-				verifyCmds = append([]string{}, active.VerifyCmds...)
-				lintPolicy = normalizePlanLintPolicy(fileCfg)
-				if lintPolicy != "off" {
-					issues := lintPlanTask(task)
-					if issues.MultipleVerify || issues.MultipleOutcome {
-						var warnings []string
-						if issues.MultipleVerify {
-							warnings = append(warnings, "multiple Verify commands")
-						}
-						if issues.MultipleOutcome {
-							warnings = append(warnings, "multiple Outcome lines")
-						}
-						fmt.Fprintf(os.Stderr, "Plan lint: %s\n", strings.Join(warnings, "; "))
-						if lintPolicy == "fail" {
-							os.Exit(1)
+			if cfg.mode == "build" {
+				if active, ok, err := readActiveTask(planPath); err == nil && ok {
+					task = active
+					verifyCmds = append([]string{}, active.VerifyCmds...)
+					lintPolicy = normalizePlanLintPolicy(fileCfg)
+					if lintPolicy != "off" {
+						issues := lintPlanTask(task)
+						if issues.MultipleVerify || issues.MultipleOutcome {
+							var warnings []string
+							if issues.MultipleVerify {
+								warnings = append(warnings, "multiple Verify commands")
+							}
+							if issues.MultipleOutcome {
+								warnings = append(warnings, "multiple Outcome lines")
+							}
+							fmt.Fprintf(os.Stderr, "Plan lint: %s\n", strings.Join(warnings, "; "))
+							if lintPolicy == "fail" {
+								os.Exit(1)
+							}
 						}
 					}
+				} else if err != nil {
+					fmt.Fprintf(os.Stderr, "Plan lint: unable to parse active task: %v\n", err)
 				}
-			}
 			verifyPolicy = normalizeVerifyMissingPolicy(fileCfg)
 			if len(verifyCmds) == 0 && (verifyPolicy == "fallback") {
 				verifyCmds = readAgentsVerifyFallback("AGENTS.md")
@@ -435,7 +437,45 @@ func promptForMode(mode string) string {
 }
 
 func hasCompletionSentinel(output string) bool {
-	return strings.Contains(output, completionSentinel)
+	inFence := false
+	fenceChar := byte(0)
+	fenceLen := 0
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if len(trimmed) >= 3 {
+			if !inFence {
+				if trimmed[0] == '`' || trimmed[0] == '~' {
+					fenceChar = trimmed[0]
+					fenceLen = 1
+					for fenceLen < len(trimmed) && trimmed[fenceLen] == fenceChar {
+						fenceLen++
+					}
+					if fenceLen >= 3 {
+						inFence = true
+						continue
+					}
+				}
+			} else if fenceChar != 0 {
+				count := 0
+				for count < len(trimmed) && trimmed[count] == fenceChar {
+					count++
+				}
+				if count >= fenceLen {
+					inFence = false
+					fenceChar = 0
+					fenceLen = 0
+					continue
+				}
+			}
+		}
+		if inFence {
+			continue
+		}
+		if trimmed == completionSentinel {
+			return true
+		}
+	}
+	return false
 }
 
 func runVerification(ctx context.Context, runner runtimeExec, cmds []string, logFile *os.File) (string, error) {
