@@ -143,6 +143,9 @@ Notes:
 - `verify_missing_policy` controls what happens if a task has no `Verify:` command; default `strict` exits with a clear error.
 - `plan_lint_policy` controls whether non-atomic plan tasks are warned or fail the build; default `warn`.
 - `runtime: docker-persist` reuses a long-lived container; stop/remove it with `docker stop <name>` / `docker rm <name>` if needed.
+- Build agents can emit `RAUF_COMPLETE` to end an iteration early after finishing work.
+- `.rauf/context.md` (optional) is injected into prompts as additional context when present.
+- `.rauf/state.md` is a human-readable summary of the latest state and verification output.
 
 ## SpecFirst import
 
