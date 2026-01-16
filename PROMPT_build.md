@@ -26,6 +26,18 @@ Plan: {{.PlanPath}}
 
 {{.PlanSummary}}
 
+{{- if .CapabilityMap }}
+## What You Can Do (from AGENTS.md)
+
+{{.CapabilityMap}}
+{{- end }}
+
+{{- if .ContextFile }}
+## Additional Context (.rauf/context.md)
+
+{{.ContextFile}}
+{{- end }}
+
 ---
 
 ## Phase 0a — Orientation

@@ -17,6 +17,8 @@ type promptData struct {
 	PlanPath                string
 	ActiveTask              string
 	VerifyCommand           string
+	CapabilityMap           string
+	ContextFile             string
 	SpecContext             string
 	RelevantFiles           string
 	RepoMap                 string
@@ -28,11 +30,13 @@ type promptData struct {
 }
 
 const (
-	maxSpecBytes     = 40 * 1024
-	maxRelevantBytes = 60 * 1024
-	maxFileBytes     = 12 * 1024
-	maxRepoMapLines  = 200
-	maxVerifyOutput  = 12 * 1024
+	maxSpecBytes       = 40 * 1024
+	maxRelevantBytes   = 60 * 1024
+	maxFileBytes       = 12 * 1024
+	maxRepoMapLines    = 200
+	maxVerifyOutput    = 12 * 1024
+	maxCapabilityBytes = 4 * 1024
+	maxContextBytes    = 8 * 1024
 )
 
 func buildPromptContent(promptFile string, data promptData) (string, string, error) {
@@ -186,6 +190,41 @@ func readRelevantFiles(task planTask, gitAvailable bool, maxBytes int) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func readAgentsCapabilityMap(path string, maxBytes int) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	section := ""
+	var b strings.Builder
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "## ") {
+			section = strings.TrimSpace(strings.TrimPrefix(trimmed, "## "))
+			continue
+		}
+		if section != "Commands" && section != "Git" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "- ") {
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(trimmed)
+		}
+	}
+	return truncateHead(strings.TrimSpace(b.String()), maxBytes)
+}
+
+func readContextFile(path string, maxBytes int) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return truncateHead(strings.TrimSpace(string(data)), maxBytes)
 }
 
 func searchRelevantFiles(task planTask) []string {

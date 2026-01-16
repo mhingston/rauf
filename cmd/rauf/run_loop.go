@@ -153,12 +153,16 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 		if cfg.mode == "build" {
 			planSummary = buildPlanSummary(planPath, task)
 		}
+		capabilityMap := readAgentsCapabilityMap("AGENTS.md", maxCapabilityBytes)
+		contextFile := readContextFile(".rauf/context.md", maxContextBytes)
 
 		promptContent, promptHash, err := buildPromptContent(cfg.promptFile, promptData{
 			Mode:                    cfg.mode,
 			PlanPath:                planPath,
 			ActiveTask:              task.TitleLine,
 			VerifyCommand:           formatVerifyCommands(verifyCmds),
+			CapabilityMap:           capabilityMap,
+			ContextFile:             contextFile,
 			SpecContext:             "",
 			RelevantFiles:           "",
 			RepoMap:                 repoMap,
