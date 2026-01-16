@@ -17,6 +17,11 @@ type planTask struct {
 	FilesMentioned    []string
 }
 
+type planLintResult struct {
+	MultipleVerify  bool
+	MultipleOutcome bool
+}
+
 func readActiveTask(planPath string) (planTask, bool, error) {
 	file, err := os.Open(planPath)
 	if err != nil {
@@ -103,6 +108,24 @@ func readActiveTask(planPath string) (planTask, bool, error) {
 
 	task.FilesMentioned = extractFileMentions(task.TaskBlock)
 	return task, true, nil
+}
+
+func lintPlanTask(task planTask) planLintResult {
+	return planLintResult{
+		MultipleVerify:  len(task.VerifyCmds) > 1,
+		MultipleOutcome: countOutcomeLines(task.TaskBlock) > 1,
+	}
+}
+
+func countOutcomeLines(lines []string) int {
+	outcomeLine := regexp.MustCompile(`^\s*[-*]?\s*Outcome:\s*\S+`)
+	count := 0
+	for _, line := range lines {
+		if outcomeLine.MatchString(line) {
+			count++
+		}
+	}
+	return count
 }
 
 func isVerifyPlaceholder(value string) bool {

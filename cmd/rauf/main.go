@@ -71,6 +71,7 @@ type runtimeConfig struct {
 	RetryJitter                bool
 	RetryMatch                 []string
 	RetryJitterSet             bool
+	PlanLintPolicy             string
 }
 
 type retryConfig struct {
@@ -466,6 +467,7 @@ func loadConfig(path string) (runtimeConfig, bool, error) {
 		NoProgressIters:     2,
 		OnVerifyFail:        "soft_reset",
 		VerifyMissingPolicy: "strict",
+		PlanLintPolicy:      "warn",
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -587,6 +589,8 @@ func parseConfigBytes(data []byte, cfg *runtimeConfig) error {
 				}
 			case "retry_match":
 				cfg.RetryMatch = splitCommaList(value)
+			case "plan_lint_policy":
+				cfg.PlanLintPolicy = value
 			case "model":
 				section = "model"
 			case "strategy":

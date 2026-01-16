@@ -18,7 +18,7 @@
   - Verify: go test ./...
   - Outcome: Build loop can stop on explicit completion signal from harness output, no heuristic needed.
   - Notes: Keep behavior unchanged if sentinel is absent.
-- [ ] T3: Add plan linting for non-atomic tasks
+- [x] T3: Add plan linting for non-atomic tasks
   - Spec: specs/agent-native-fits.md#4-scenarios-acceptance-criteria
   - Verify: go test ./...
   - Outcome: Plan loader flags tasks with multiple Verify commands or multiple outcomes.

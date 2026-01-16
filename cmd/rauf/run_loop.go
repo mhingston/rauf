@@ -97,10 +97,28 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 		verifyPolicy := ""
 		needVerifyInstruction := ""
 		missingVerify := false
+		lintPolicy := ""
 		if cfg.mode == "build" {
 			if active, ok, err := readActiveTask(planPath); err == nil && ok {
 				task = active
 				verifyCmds = append([]string{}, active.VerifyCmds...)
+				lintPolicy = normalizePlanLintPolicy(fileCfg)
+				if lintPolicy != "off" {
+					issues := lintPlanTask(task)
+					if issues.MultipleVerify || issues.MultipleOutcome {
+						var warnings []string
+						if issues.MultipleVerify {
+							warnings = append(warnings, "multiple Verify commands")
+						}
+						if issues.MultipleOutcome {
+							warnings = append(warnings, "multiple Outcome lines")
+						}
+						fmt.Fprintf(os.Stderr, "Plan lint: %s\n", strings.Join(warnings, "; "))
+						if lintPolicy == "fail" {
+							os.Exit(1)
+						}
+					}
+				}
 			}
 			verifyPolicy = normalizeVerifyMissingPolicy(fileCfg)
 			if len(verifyCmds) == 0 && (verifyPolicy == "fallback") {
@@ -456,6 +474,19 @@ func normalizeVerifyMissingPolicy(cfg runtimeConfig) string {
 		return policy
 	default:
 		return "strict"
+	}
+}
+
+func normalizePlanLintPolicy(cfg runtimeConfig) string {
+	policy := strings.ToLower(strings.TrimSpace(cfg.PlanLintPolicy))
+	if policy == "" {
+		return "warn"
+	}
+	switch policy {
+	case "warn", "fail", "off":
+		return policy
+	default:
+		return "warn"
 	}
 }
 
