@@ -1,6 +1,6 @@
 ---
 id: agent-native-fits
-status: draft # draft | approved
+status: approved # draft | approved
 version: 0.1.0
 owner: mark
 ---
