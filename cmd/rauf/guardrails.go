@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -60,6 +61,63 @@ func enforceVerificationGuardrails(cfg runtimeConfig, verifyStatus string, planC
 		return false, "verify_required_for_change"
 	}
 	return true, ""
+}
+
+func enforceMissingVerifyGuardrail(planPath, headBefore, headAfter string, planChanged bool) (bool, string) {
+	if !planChanged {
+		return false, "missing_verify_plan_not_updated"
+	}
+	planPath = filepath.Clean(planPath)
+	files := listChangedFiles(headBefore, headAfter)
+	for _, file := range files {
+		if filepath.Clean(file) != planPath {
+			return false, "missing_verify_non_plan_change"
+		}
+	}
+	return true, ""
+}
+
+func enforceMissingVerifyNoGit(planChanged bool, fingerprintBefore, fingerprintAfter string) (bool, string) {
+	if !planChanged {
+		return false, "missing_verify_plan_not_updated"
+	}
+	if fingerprintBefore != "" && fingerprintAfter != "" && fingerprintBefore != fingerprintAfter {
+		return false, "missing_verify_non_plan_change"
+	}
+	return true, ""
+}
+
+func listChangedFiles(headBefore, headAfter string) []string {
+	files := []string{}
+	if headAfter != headBefore {
+		if names, err := gitOutput("diff", "--name-only", headBefore+".."+headAfter); err == nil {
+			files = append(files, splitLines(names)...)
+		}
+	} else if status, err := gitOutput("status", "--porcelain"); err == nil {
+		for _, line := range splitLines(status) {
+			if len(line) < 4 {
+				continue
+			}
+			path := parseStatusPath(line[3:])
+			if path == "" {
+				continue
+			}
+			files = append(files, path)
+		}
+	}
+	return files
+}
+
+func parseStatusPath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.Contains(value, "->") {
+		parts := strings.Split(value, "->")
+		return strings.TrimSpace(parts[len(parts)-1])
+	}
+	return value
 }
 
 func splitLines(value string) []string {

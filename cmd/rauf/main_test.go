@@ -58,7 +58,10 @@ func TestParseArgsModes(t *testing.T) {
 }
 
 func TestSplitArgs(t *testing.T) {
-	args := splitArgs("--foo bar --name=\"hello world\" --path='a b'")
+	args, err := splitArgs("--foo bar --name=\"hello world\" --path='a b'")
+	if err != nil {
+		t.Fatalf("split args failed: %v", err)
+	}
 	if len(args) != 4 {
 		t.Fatalf("expected 4 args, got %d", len(args))
 	}

@@ -1,5 +1,5 @@
 BINARY_NAME ?= rauf
-VERSION ?= dev
+VERSION ?= 1.0.1
 BUILD_DIR ?= dist
 
 GOOS_LIST ?= darwin linux windows

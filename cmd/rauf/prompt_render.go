@@ -136,7 +136,7 @@ func readSpecContexts(paths []string, maxBytes int) string {
 		}
 		seen[path] = struct{}{}
 		chunk := string(data)
-		chunk = truncateBytes(chunk, minInt(maxBytes, budget))
+		chunk = truncateHead(chunk, minInt(maxBytes, budget))
 		if chunk == "" {
 			continue
 		}
@@ -171,7 +171,7 @@ func readRelevantFiles(task planTask, gitAvailable bool, maxBytes int) string {
 			continue
 		}
 		seen[path] = struct{}{}
-		chunk := truncateBytes(string(data), minInt(maxFileBytes, budget))
+		chunk := truncateHead(string(data), minInt(maxFileBytes, budget))
 		if chunk == "" {
 			continue
 		}
@@ -260,7 +260,17 @@ func extractSearchTerms(task planTask) []string {
 	return terms
 }
 
-func truncateBytes(value string, max int) string {
+func truncateHead(value string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	if len(value) <= max {
+		return value
+	}
+	return value[:max]
+}
+
+func truncateTail(value string, max int) string {
 	if max <= 0 {
 		return ""
 	}
@@ -345,5 +355,5 @@ func normalizeVerifyOutput(output string) string {
 	if output == "" {
 		return ""
 	}
-	return truncateBytes(output, maxVerifyOutput)
+	return truncateTail(output, maxVerifyOutput)
 }

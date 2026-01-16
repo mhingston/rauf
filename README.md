@@ -1,5 +1,7 @@
 # rauf
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mhingston/rauf)
+
 `rauf` is a spec-first, plan-driven execution loop for software projects.
 It enforces explicit specifications, verification-backed planning, and
 one-task-at-a-time implementation.
@@ -26,7 +28,7 @@ Each phase is isolated and enforced.
 
 ## Beyond the Traditional Ralph Loop
 
-`rauf` is a formal, Go-based implementation of the "[Ralph Wiggum](https://github.com/ghuntley/how-to-ralph-wiggum)" loop philosophy. While a traditional loop might be a simple bash script feeding a CLI, `rauf` provides an orchestration layer designed for production-grade software engineering:
+`rauf` is a formal, Go-based implementation of the "[Ralph](https://github.com/ghuntley/how-to-ralph-wiggum)" loop philosophy. While a traditional loop might be a simple bash script feeding a CLI, `rauf` provides an orchestration layer designed for production-grade software engineering:
 
 - **Native Orchestration:** Move beyond simple `while true` loops with first-class `Architect -> Plan -> Build` strategies.
 - **Enhanced Backpressure:** Persistent state tracking (via `state.json`) ensures that verification failures and loop errors are fed back into the next iteration's context for self-correction.
@@ -198,17 +200,4 @@ RAUF_RETRY_BACKOFF_MAX=30s  # Max backoff duration
 RAUF_RETRY_NO_JITTER=1  # Disable backoff jitter
 RAUF_RETRY_MATCH=...    # Comma-separated match tokens
 
-# Backward-compatible aliases:
-RALPH_YOLO=1
-RALPH_MODEL_OVERRIDE=x
-RALPH_HARNESS=claude
-RALPH_HARNESS_ARGS=...
-RALPH_NO_PUSH=1
-RALPH_LOG_DIR=path
-RALPH_RETRY=1
-RALPH_RETRY_MAX=3
-RALPH_RETRY_BACKOFF_BASE=2s
-RALPH_RETRY_BACKOFF_MAX=30s
-RALPH_RETRY_NO_JITTER=1
-RALPH_RETRY_MATCH=...
 ```

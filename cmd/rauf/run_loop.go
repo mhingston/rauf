@@ -53,6 +53,11 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 	if maxNoProgress <= 0 {
 		maxNoProgress = 2
 	}
+	logDirName := strings.TrimSpace(logDir)
+	if logDirName == "" {
+		logDirName = "logs"
+	}
+	excludeDirs := []string{".git", ".rauf", logDirName}
 
 	lastResult := iterationResult{}
 
@@ -85,15 +90,11 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 			planHashBefore = fileHash(planPath)
 		}
 
-		fingerprintBefore := ""
-		if !gitAvailable {
-			fingerprintBefore = workspaceFingerprint(".")
-		}
-
 		var task planTask
 		var verifyCmds []string
 		verifyPolicy := ""
 		needVerifyInstruction := ""
+		missingVerify := false
 		if cfg.mode == "build" {
 			if active, ok, err := readActiveTask(planPath); err == nil && ok {
 				task = active
@@ -108,6 +109,7 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 			}
 			if len(verifyCmds) == 0 {
 				if verifyPolicy == "agent_enforced" {
+					missingVerify = true
 					missingReason := "missing"
 					if task.VerifyPlaceholder {
 						missingReason = "placeholder (Verify: TBD)"
@@ -121,6 +123,15 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 					fmt.Fprintf(os.Stderr, "Error: verification command %s. Update the plan before continuing.\n", missingReason)
 					os.Exit(1)
 				}
+			}
+		}
+
+		fingerprintBefore := ""
+		fingerprintBeforePlanExcluded := ""
+		if !gitAvailable {
+			fingerprintBefore = workspaceFingerprint(".", excludeDirs, nil)
+			if missingVerify && planPath != "" {
+				fingerprintBeforePlanExcluded = workspaceFingerprint(".", excludeDirs, []string{planPath})
 			}
 		}
 
@@ -262,11 +273,20 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 		guardrailOk := true
 		guardrailReason := ""
 		worktreeChanged := false
-		if cfg.mode == "build" && gitAvailable {
-			worktreeChanged = headAfter != headBefore || !isCleanWorkingTree() || planHashAfter != planHashBefore
-			guardrailOk, guardrailReason = enforceGuardrails(fileCfg, headBefore, headAfter)
-			if guardrailOk {
-				guardrailOk, guardrailReason = enforceVerificationGuardrails(fileCfg, verifyStatus, planHashBefore != planHashAfter, worktreeChanged)
+		if cfg.mode == "build" {
+			if gitAvailable {
+				worktreeChanged = headAfter != headBefore || !isCleanWorkingTree() || planHashAfter != planHashBefore
+				guardrailOk, guardrailReason = enforceGuardrails(fileCfg, headBefore, headAfter)
+				if guardrailOk {
+					if missingVerify {
+						guardrailOk, guardrailReason = enforceMissingVerifyGuardrail(planPath, headBefore, headAfter, planHashBefore != planHashAfter)
+					} else {
+						guardrailOk, guardrailReason = enforceVerificationGuardrails(fileCfg, verifyStatus, planHashBefore != planHashAfter, worktreeChanged)
+					}
+				}
+			} else if missingVerify {
+				fingerprintAfterPlanExcluded := workspaceFingerprint(".", excludeDirs, []string{planPath})
+				guardrailOk, guardrailReason = enforceMissingVerifyNoGit(planHashBefore != planHashAfter, fingerprintBeforePlanExcluded, fingerprintAfterPlanExcluded)
 			}
 		}
 
@@ -292,7 +312,7 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 		if gitAvailable {
 			stalled = isCleanWorkingTree() && headAfter == headBefore && planHashAfter == planHashBefore
 		} else {
-			fingerprintAfter := workspaceFingerprint(".")
+			fingerprintAfter := workspaceFingerprint(".", excludeDirs, nil)
 			stalled = fingerprintAfter == fingerprintBefore && planHashAfter == planHashBefore
 		}
 

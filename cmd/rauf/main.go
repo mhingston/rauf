@@ -136,18 +136,18 @@ func main() {
 			model = configuredModel
 		}
 	}
-	if override := envFirst("RAUF_MODEL_OVERRIDE", "RALPH_MODEL_OVERRIDE"); override != "" {
+	if override := envFirst("RAUF_MODEL_OVERRIDE"); override != "" {
 		model = override
 	}
 
 	yolo := fileCfg.Yolo
-	if value, ok := envBool("RAUF_YOLO", "RALPH_YOLO"); ok {
+	if value, ok := envBool("RAUF_YOLO"); ok {
 		yolo = value
 	}
 	yoloEnabled := cfg.mode == "build" && yolo
 
 	noPush := fileCfg.NoPush
-	if value, ok := envBool("RAUF_NO_PUSH", "RALPH_NO_PUSH"); ok {
+	if value, ok := envBool("RAUF_NO_PUSH"); ok {
 		noPush = value
 	}
 
@@ -155,17 +155,17 @@ func main() {
 	if harness == "" {
 		harness = "claude"
 	}
-	if override := envFirst("RAUF_HARNESS", "RALPH_HARNESS"); override != "" {
+	if override := envFirst("RAUF_HARNESS"); override != "" {
 		harness = override
 	}
 
 	harnessArgs := fileCfg.HarnessArgs
-	if override := envFirst("RAUF_HARNESS_ARGS", "RALPH_HARNESS_ARGS"); override != "" {
+	if override := envFirst("RAUF_HARNESS_ARGS"); override != "" {
 		harnessArgs = override
 	}
 
 	logDir := fileCfg.LogDir
-	if override := envFirst("RAUF_LOG_DIR", "RALPH_LOG_DIR"); override != "" {
+	if override := envFirst("RAUF_LOG_DIR"); override != "" {
 		logDir = override
 	}
 
@@ -208,26 +208,26 @@ func main() {
 	}
 
 	retryEnabled := fileCfg.RetryOnFailure
-	if value, ok := envBool("RAUF_RETRY", "RALPH_RETRY"); ok {
+	if value, ok := envBool("RAUF_RETRY"); ok {
 		retryEnabled = value
 	}
 
 	retryMaxAttempts := fileCfg.RetryMaxAttempts
-	if override := envFirst("RAUF_RETRY_MAX", "RALPH_RETRY_MAX"); override != "" {
+	if override := envFirst("RAUF_RETRY_MAX"); override != "" {
 		if v, err := strconv.Atoi(override); err == nil && v >= 0 {
 			retryMaxAttempts = v
 		}
 	}
 
 	retryBackoffBase := fileCfg.RetryBackoffBase
-	if override := envFirst("RAUF_RETRY_BACKOFF_BASE", "RALPH_RETRY_BACKOFF_BASE"); override != "" {
+	if override := envFirst("RAUF_RETRY_BACKOFF_BASE"); override != "" {
 		if v, err := time.ParseDuration(override); err == nil {
 			retryBackoffBase = v
 		}
 	}
 
 	retryBackoffMax := fileCfg.RetryBackoffMax
-	if override := envFirst("RAUF_RETRY_BACKOFF_MAX", "RALPH_RETRY_BACKOFF_MAX"); override != "" {
+	if override := envFirst("RAUF_RETRY_BACKOFF_MAX"); override != "" {
 		if v, err := time.ParseDuration(override); err == nil {
 			retryBackoffMax = v
 		}
@@ -235,13 +235,13 @@ func main() {
 
 	retryJitter := fileCfg.RetryJitter
 	retryJitterSet := fileCfg.RetryJitterSet
-	if value, ok := envBool("RAUF_RETRY_NO_JITTER", "RALPH_RETRY_NO_JITTER"); ok {
+	if value, ok := envBool("RAUF_RETRY_NO_JITTER"); ok {
 		retryJitter = !value
 		retryJitterSet = true
 	}
 
 	retryMatch := append([]string(nil), fileCfg.RetryMatch...)
-	if override := envFirst("RAUF_RETRY_MATCH", "RALPH_RETRY_MATCH"); override != "" {
+	if override := envFirst("RAUF_RETRY_MATCH"); override != "" {
 		retryMatch = splitCommaList(override)
 	}
 
@@ -306,10 +306,15 @@ func main() {
 	}
 
 	state := loadState()
+	dockerArgsList, err := splitArgs(dockerArgs)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	runner := runtimeExec{
 		Runtime:         runtime,
 		DockerImage:     dockerImage,
-		DockerArgs:      splitArgs(dockerArgs),
+		DockerArgs:      dockerArgsList,
 		DockerContainer: dockerContainer,
 	}
 
@@ -480,6 +485,7 @@ func parseConfigBytes(data []byte, cfg *runtimeConfig) error {
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	section := ""
 	var strategyCurrent *strategyStep
+	var inForbiddenPaths bool
 	for scanner.Scan() {
 		line := scanner.Text()
 		trimmed := strings.TrimSpace(line)
@@ -495,6 +501,7 @@ func parseConfigBytes(data []byte, cfg *runtimeConfig) error {
 		if indent == 0 {
 			section = ""
 			strategyCurrent = nil
+			inForbiddenPaths = false
 			if ok && value == "" {
 				section = key
 				continue
@@ -531,7 +538,12 @@ func parseConfigBytes(data []byte, cfg *runtimeConfig) error {
 					cfg.MaxCommits = v
 				}
 			case "forbidden_paths":
-				cfg.ForbiddenPaths = splitCommaList(value)
+				if value == "" {
+					section = "forbidden_paths"
+					inForbiddenPaths = true
+				} else {
+					cfg.ForbiddenPaths = splitCommaList(value)
+				}
 			case "no_progress_iterations":
 				if v, err := strconv.Atoi(value); err == nil && v >= 0 {
 					cfg.NoProgressIters = v
@@ -588,6 +600,17 @@ func parseConfigBytes(data []byte, cfg *runtimeConfig) error {
 				cfg.Model = make(map[string]string)
 			}
 			cfg.Model[key] = value
+			continue
+		}
+
+		if section == "forbidden_paths" && inForbiddenPaths {
+			if strings.HasPrefix(trimmed, "-") {
+				item := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+				item = stripQuotes(item)
+				if item != "" {
+					cfg.ForbiddenPaths = append(cfg.ForbiddenPaths, item)
+				}
+			}
 			continue
 		}
 
@@ -710,7 +733,11 @@ func runHarnessOnce(ctx context.Context, prompt string, harness, harnessArgs, mo
 		// Generic harness that reads prompt from stdin.
 	}
 	if harnessArgs != "" {
-		args = append(args, splitArgs(harnessArgs)...)
+		extraArgs, err := splitArgs(harnessArgs)
+		if err != nil {
+			return "", err
+		}
+		args = append(args, extraArgs...)
 	}
 
 	buffer := &limitedBuffer{max: 8 * 1024}
@@ -735,7 +762,8 @@ func openLogFile(mode string, logDir string) (*os.File, string, error) {
 		return nil, "", err
 	}
 
-	stamp := time.Now().Format("20060102-150405")
+	now := time.Now()
+	stamp := now.Format("20060102-150405.000000000")
 	path := filepath.Join(logDir, fmt.Sprintf("%s-%s.jsonl", mode, stamp))
 	file, err := os.Create(path)
 	if err != nil {
@@ -830,18 +858,46 @@ func fileHash(path string) string {
 	return fmt.Sprintf("%x", sum)
 }
 
-func workspaceFingerprint(root string) string {
+func workspaceFingerprint(root string, excludeDirs []string, excludeFiles []string) string {
 	hasher := sha256.New()
+	excludeDirAbs := make([]string, 0, len(excludeDirs))
+	for _, dir := range excludeDirs {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			continue
+		}
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(root, dir)
+		}
+		excludeDirAbs = append(excludeDirAbs, filepath.Clean(dir))
+	}
+	excludeFileAbs := make(map[string]struct{}, len(excludeFiles))
+	for _, file := range excludeFiles {
+		file = strings.TrimSpace(file)
+		if file == "" {
+			continue
+		}
+		if !filepath.IsAbs(file) {
+			file = filepath.Join(root, file)
+		}
+		excludeFileAbs[filepath.Clean(file)] = struct{}{}
+	}
+
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		name := d.Name()
-		if name == ".git" || name == "logs" {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
+		cleanPath := filepath.Clean(path)
+		if _, ok := excludeFileAbs[cleanPath]; ok {
 			return nil
+		}
+		for _, dir := range excludeDirAbs {
+			if cleanPath == dir || strings.HasPrefix(cleanPath, dir+string(filepath.Separator)) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 		}
 		if d.IsDir() {
 			return nil
@@ -932,7 +988,10 @@ func splitCommaList(value string) []string {
 	return items
 }
 
-func splitArgs(value string) []string {
+func splitArgs(value string) ([]string, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
 	fields := []string{}
 	current := strings.Builder{}
 	inQuote := rune(0)
@@ -961,10 +1020,16 @@ func splitArgs(value string) []string {
 			current.WriteRune(r)
 		}
 	}
+	if escaped {
+		return nil, fmt.Errorf("invalid args: unfinished escape")
+	}
+	if inQuote != 0 {
+		return nil, fmt.Errorf("invalid args: unterminated quote")
+	}
 	if current.Len() > 0 {
 		fields = append(fields, current.String())
 	}
-	return fields
+	return fields, nil
 }
 
 type limitedBuffer struct {

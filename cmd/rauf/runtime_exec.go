@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -47,7 +48,8 @@ func (r runtimeExec) command(ctx context.Context, name string, args ...string) (
 
 func (r runtimeExec) runShell(ctx context.Context, command string, stdout, stderr io.Writer) (string, error) {
 	buffer := &limitedBuffer{max: 16 * 1024}
-	cmd, err := r.command(ctx, "sh", "-c", command)
+	name, args := r.shellArgs(command)
+	cmd, err := r.command(ctx, name, args...)
 	if err != nil {
 		return "", err
 	}
@@ -55,6 +57,16 @@ func (r runtimeExec) runShell(ctx context.Context, command string, stdout, stder
 	cmd.Stderr = io.MultiWriter(stderr, buffer)
 	cmd.Env = os.Environ()
 	return buffer.String(), cmd.Run()
+}
+
+func (r runtimeExec) shellArgs(command string) (string, []string) {
+	if r.isDocker() || r.isDockerPersist() {
+		return "sh", []string{"-c", command}
+	}
+	if runtime.GOOS == "windows" {
+		return "cmd", []string{"/C", command}
+	}
+	return "sh", []string{"-c", command}
 }
 
 func (r runtimeExec) resolveWorkDir() (string, error) {
