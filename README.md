@@ -114,6 +114,7 @@ forbidden_paths: ""
 no_progress_iterations: 2
 on_verify_fail: soft_reset # soft_reset | keep_commit | hard_reset | no_push_only | wip_branch
 verify_missing_policy: strict # strict | agent_enforced | fallback
+plan_lint_policy: warn # warn | fail | off
 allow_verify_fallback: false
 require_verify_on_change: false
 require_verify_for_plan_update: false
@@ -140,6 +141,7 @@ strategy:
 Notes:
 - `on_verify_fail` controls git hygiene when verification fails; default `soft_reset` keeps changes staged and drops the commit from `HEAD`.
 - `verify_missing_policy` controls what happens if a task has no `Verify:` command; default `strict` exits with a clear error.
+- `plan_lint_policy` controls whether non-atomic plan tasks are warned or fail the build; default `warn`.
 - `runtime: docker-persist` reuses a long-lived container; stop/remove it with `docker stop <name>` / `docker rm <name>` if needed.
 
 ## SpecFirst import
