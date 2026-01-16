@@ -26,7 +26,7 @@ Each phase is isolated and enforced.
 
 ## Beyond the Traditional Ralph Loop
 
-`rauf` is a formal, Go-based implementation of the "Ralph Wiggum" loop philosophy. While a traditional loop might be a simple bash script feeding a CLI, `rauf` provides an orchestration layer designed for production-grade software engineering:
+`rauf` is a formal, Go-based implementation of the "[Ralph Wiggum](https://github.com/ghuntley/how-to-ralph-wiggum)" loop philosophy. While a traditional loop might be a simple bash script feeding a CLI, `rauf` provides an orchestration layer designed for production-grade software engineering:
 
 - **Native Orchestration:** Move beyond simple `while true` loops with first-class `Architect -> Plan -> Build` strategies.
 - **Enhanced Backpressure:** Persistent state tracking (via `state.json`) ensures that verification failures and loop errors are fed back into the next iteration's context for self-correction.
