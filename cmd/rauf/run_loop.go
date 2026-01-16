@@ -18,6 +18,8 @@ type iterationResult struct {
 	HeadAfter    string
 }
 
+const completionSentinel = "RAUF_COMPLETE"
+
 func runStrategy(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state raufState, gitAvailable bool, branch, planPath, defaultModel string, yoloEnabled bool, harness, harnessArgs string, noPush bool, logDir string, retryEnabled bool, retryMaxAttempts int, retryBackoffBase, retryBackoffMax time.Duration, retryJitter bool, retryMatch []string) {
 	lastResult := iterationResult{}
 	for _, step := range fileCfg.Strategy {
@@ -222,6 +224,11 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 			os.Exit(1)
 		}
 
+		completionSignal := ""
+		if hasCompletionSentinel(output) {
+			completionSignal = completionSentinel
+		}
+
 		prevVerifyStatus := state.LastVerificationStatus
 		prevVerifyHash := state.LastVerificationHash
 		if cfg.mode == "architect" {
@@ -325,10 +332,15 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 			progress = true
 		}
 		exitReason := ""
+		if completionSignal != "" && (cfg.mode != "build" || (!missingVerify && verifyStatus != "fail")) {
+			exitReason = "agent_complete"
+		}
 		if !progress {
 			noProgress++
 			if noProgress >= maxNoProgress {
-				exitReason = "no_progress"
+				if exitReason == "" {
+					exitReason = "no_progress"
+				}
 			}
 		} else {
 			noProgress = 0
@@ -336,7 +348,9 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 
 		if cfg.mode == "build" {
 			if hasPlanFile(planPath) && !hasUncheckedTasks(planPath) && verifyStatus != "fail" {
-				exitReason = "no_unchecked_tasks"
+				if exitReason == "" {
+					exitReason = "no_unchecked_tasks"
+				}
 			}
 		}
 
@@ -345,19 +359,20 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 		}
 
 		writeLogEntry(logFile, logEntry{
-			Type:         "iteration_end",
-			Mode:         cfg.mode,
-			Iteration:    iterNum,
-			VerifyCmd:    formatVerifyCommands(verifyCmds),
-			VerifyStatus: verifyStatus,
-			VerifyOutput: verifyOutput,
-			PlanHash:     planHashAfter,
-			PromptHash:   promptHash,
-			Branch:       branch,
-			HeadBefore:   headBefore,
-			HeadAfter:    headAfter,
-			Guardrail:    guardrailReason,
-			ExitReason:   exitReason,
+			Type:             "iteration_end",
+			Mode:             cfg.mode,
+			Iteration:        iterNum,
+			VerifyCmd:        formatVerifyCommands(verifyCmds),
+			VerifyStatus:     verifyStatus,
+			VerifyOutput:     verifyOutput,
+			PlanHash:         planHashAfter,
+			PromptHash:       promptHash,
+			Branch:           branch,
+			HeadBefore:       headBefore,
+			HeadAfter:        headAfter,
+			Guardrail:        guardrailReason,
+			ExitReason:       exitReason,
+			CompletionSignal: completionSignal,
 		})
 
 		if closeErr := logFile.Close(); closeErr != nil {
@@ -370,6 +385,8 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 				fmt.Printf("No progress after %d iterations. Exiting.\n", maxNoProgress)
 			case "no_unchecked_tasks":
 				fmt.Println("No unchecked tasks remaining. Exiting.")
+			case "agent_complete":
+				fmt.Println("Agent requested completion. Exiting.")
 			}
 			break
 		}
@@ -397,6 +414,10 @@ func promptForMode(mode string) string {
 	default:
 		return "PROMPT_build.md"
 	}
+}
+
+func hasCompletionSentinel(output string) bool {
+	return strings.Contains(output, completionSentinel)
 }
 
 func runVerification(ctx context.Context, runner runtimeExec, cmds []string, logFile *os.File) (string, error) {

@@ -13,7 +13,7 @@
   - Verify: go test ./...
   - Outcome: Prompts include "What You Can Do" from AGENTS.md and `.rauf/context.md` when present without changing defaults.
   - Notes: Cap added context to avoid prompt bloat.
-- [ ] T2: Add explicit completion sentinel handling in build loop
+- [x] T2: Add explicit completion sentinel handling in build loop
   - Spec: specs/agent-native-fits.md#4-scenarios-acceptance-criteria
   - Verify: go test ./...
   - Outcome: Build loop can stop on explicit completion signal from harness output, no heuristic needed.

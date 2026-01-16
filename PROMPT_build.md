@@ -17,6 +17,7 @@ You MUST:
 - Complete exactly ONE unchecked plan task per iteration
 - Run verification commands
 - Commit verified changes
+- If you are fully done and want the loop to stop, emit the line `RAUF_COMPLETE`.
 
 ---
 
