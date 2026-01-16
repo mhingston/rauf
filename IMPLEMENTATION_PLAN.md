@@ -23,7 +23,7 @@
   - Verify: go test ./...
   - Outcome: Plan loader flags tasks with multiple Verify commands or multiple outcomes.
   - Notes: Default to warning unless config opts into failure.
-- [ ] T4: Write a human-readable state summary file
+- [x] T4: Write a human-readable state summary file
   - Spec: specs/agent-native-fits.md#4-scenarios-acceptance-criteria
   - Verify: go test ./...
   - Outcome: A summary file updates per iteration to aid audit/debug.
