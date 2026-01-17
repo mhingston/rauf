@@ -169,6 +169,12 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 			}
 		}
 
+		backpressurePack := ""
+		if cfg.mode == "build" || cfg.mode == "plan" {
+			backpressurePack = buildBackpressurePack(state, gitAvailable)
+		}
+		state.BackpressureInjected = backpressurePack != ""
+
 		contextPack := ""
 		if cfg.mode == "build" {
 			contextPack = buildContextPack(planPath, task, verifyCmds, state, gitAvailable, needVerifyInstruction)
@@ -210,8 +216,8 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		if contextPack != "" {
-			promptContent = contextPack + "\n\n" + promptContent
+		if backpressurePack != "" || contextPack != "" {
+			promptContent = backpressurePack + contextPack + "\n\n" + promptContent
 		}
 
 		logFile, logPath, err := openLogFile(cfg.mode, logDir)
@@ -242,7 +248,7 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 			Match:       retryMatch,
 		}
 
-		output, err := runHarness(ctx, promptContent, harness, harnessArgs, model, yoloEnabled, logFile, retryCfg, runner)
+		harnessRes, err := runHarness(ctx, promptContent, harness, harnessArgs, model, yoloEnabled, logFile, retryCfg, runner)
 		if err != nil {
 			stop()
 			if closeErr := logFile.Close(); closeErr != nil {
@@ -255,6 +261,18 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 			fmt.Fprintln(os.Stderr, "Harness run failed:", err)
 			os.Exit(1)
 		}
+		output := harnessRes.Output
+
+		// Check for backpressure response acknowledgment
+		backpressureAcknowledged := true
+		if state.BackpressureInjected && !hasBackpressureResponse(output) {
+			fmt.Println("Warning: Backpressure was present but model did not include '## Backpressure Response' section.")
+			backpressureAcknowledged = false
+		}
+
+		// Persist retry info for backpressure
+		state.PriorRetryCount = harnessRes.RetryCount
+		state.PriorRetryReason = harnessRes.RetryReason
 
 		completionSignal := ""
 		completionOk := true
@@ -274,7 +292,7 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 		prevVerifyStatus := state.LastVerificationStatus
 		prevVerifyHash := state.LastVerificationHash
 		if cfg.mode == "architect" {
-			if updated, ok := runArchitectQuestions(ctx, runner, &promptContent, output, harness, harnessArgs, model, yoloEnabled, logFile, retryCfg); ok {
+			if updated, ok := runArchitectQuestions(ctx, runner, &promptContent, output, state, harness, harnessArgs, model, yoloEnabled, logFile, retryCfg); ok {
 				output = updated
 			}
 		}
@@ -294,11 +312,13 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 				state.LastVerificationCommand = formatVerifyCommands(verifyCmds)
 				state.LastVerificationStatus = verifyStatus
 				state.LastVerificationHash = fileHashFromString(verifyOutput)
+				state.ConsecutiveVerifyFails++
 			} else {
 				state.LastVerificationOutput = ""
 				state.LastVerificationCommand = formatVerifyCommands(verifyCmds)
 				state.LastVerificationStatus = verifyStatus
 				state.LastVerificationHash = ""
+				state.ConsecutiveVerifyFails = 0
 			}
 			_ = saveState(state)
 		}
@@ -373,6 +393,10 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 		if verifyStatus != "skipped" && (verifyStatus != prevVerifyStatus || state.LastVerificationHash != prevVerifyHash) {
 			progress = true
 		}
+		// Unacknowledged backpressure counts against progress
+		if !backpressureAcknowledged {
+			progress = false
+		}
 		exitReason := ""
 		if completionSignal != "" && completionOk && (cfg.mode != "build" || (!missingVerify && verifyStatus != "fail")) {
 			exitReason = "completion_contract_satisfied"
@@ -395,6 +419,47 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 				}
 			}
 		}
+
+		// Persist backpressure state for next iteration
+		// Edge-triggered: only set backpressure if something failed THIS iteration
+		cleanIteration := guardrailOk &&
+			verifyStatus != "fail" &&
+			exitReason == "" &&
+			planHashBefore == planHashAfter &&
+			harnessRes.RetryCount == 0
+
+		if cleanIteration {
+			// Clear all backpressure fields after a clean iteration
+			state.PriorGuardrailStatus = ""
+			state.PriorGuardrailReason = ""
+			state.PriorExitReason = ""
+			state.PriorRetryCount = 0
+			state.PriorRetryReason = ""
+			state.PlanHashBefore = ""
+			state.PlanHashAfter = ""
+			state.PlanDiffSummary = ""
+			state.BackpressureInjected = false
+			state.ConsecutiveVerifyFails = 0
+		} else {
+			// Set backpressure fields based on what failed
+			if guardrailOk {
+				state.PriorGuardrailStatus = "pass"
+				state.PriorGuardrailReason = ""
+			} else {
+				state.PriorGuardrailStatus = "fail"
+				state.PriorGuardrailReason = guardrailReason
+			}
+			state.PriorExitReason = exitReason
+			state.PlanHashBefore = planHashBefore
+			state.PlanHashAfter = planHashAfter
+			if planHashBefore != planHashAfter {
+				state.PlanDiffSummary = generatePlanDiff(planPath, gitAvailable, 50)
+			} else {
+				state.PlanDiffSummary = ""
+			}
+			// Retry info already set from harnessRes earlier
+		}
+		_ = saveState(state)
 
 		if stalled && progress == false {
 			fmt.Println("No changes detected in iteration.")

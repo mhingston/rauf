@@ -8,20 +8,37 @@ import (
 	"strings"
 )
 
-const maxArchitectQuestions = 3
+const (
+	baseArchitectQuestions   = 3
+	bonusQuestionsPerFailure = 1
+)
 
-func runArchitectQuestions(ctx context.Context, runner runtimeExec, promptContent *string, output string, harness, harnessArgs, model string, yoloEnabled bool, logFile *os.File, retryCfg retryConfig) (string, bool) {
+// maxArchitectQuestionsForState returns the dynamic limit based on backpressure state.
+// Allows extra questions when the model is dealing with prior failures.
+func maxArchitectQuestionsForState(state raufState) int {
+	max := baseArchitectQuestions
+	if state.PriorGuardrailStatus == "fail" {
+		max += bonusQuestionsPerFailure
+	}
+	if state.LastVerificationStatus == "fail" {
+		max += bonusQuestionsPerFailure
+	}
+	return max
+}
+
+func runArchitectQuestions(ctx context.Context, runner runtimeExec, promptContent *string, output string, state raufState, harness, harnessArgs, model string, yoloEnabled bool, logFile *os.File, retryCfg retryConfig) (string, bool) {
 	reader := bufio.NewReader(os.Stdin)
 	totalAsked := 0
 	updatedOutput := output
+	maxQuestions := maxArchitectQuestionsForState(state)
 	for {
 		questions := extractQuestions(updatedOutput)
-		if len(questions) == 0 || totalAsked >= maxArchitectQuestions {
+		if len(questions) == 0 || totalAsked >= maxQuestions {
 			break
 		}
 		answers := []string{}
 		for _, q := range questions {
-			if totalAsked >= maxArchitectQuestions {
+			if totalAsked >= maxQuestions {
 				break
 			}
 			totalAsked++
@@ -37,12 +54,12 @@ func runArchitectQuestions(ctx context.Context, runner runtimeExec, promptConten
 			break
 		}
 		*promptContent = *promptContent + "\n\n# Architect Answers\n\n" + strings.Join(answers, "\n\n")
-		nextOutput, err := runHarness(ctx, *promptContent, harness, harnessArgs, model, yoloEnabled, logFile, retryCfg, runner)
+		nextResult, err := runHarness(ctx, *promptContent, harness, harnessArgs, model, yoloEnabled, logFile, retryCfg, runner)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Architect follow-up failed:", err)
 			return output, false
 		}
-		updatedOutput = nextOutput
+		updatedOutput = nextResult.Output
 	}
 	return updatedOutput, totalAsked > 0
 }

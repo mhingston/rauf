@@ -136,6 +136,8 @@ Example:
 - Plan tasks MUST NOT contain "Verify: TBD".
 - If a spec scenario has "Verification: TBD", create an explicit task whose
   outcome is to define and implement verification.
+- If prior iteration shows verify failures in the Backpressure Pack,
+  prefer tasks that repair verification first.
 
 ---
 

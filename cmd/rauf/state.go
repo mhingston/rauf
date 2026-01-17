@@ -13,6 +13,16 @@ type raufState struct {
 	LastVerificationCommand string `json:"last_verification_command"`
 	LastVerificationStatus  string `json:"last_verification_status"`
 	LastVerificationHash    string `json:"last_verification_hash"`
+	PriorGuardrailStatus    string `json:"prior_guardrail_status"`
+	PriorGuardrailReason    string `json:"prior_guardrail_reason"`
+	PriorExitReason         string `json:"prior_exit_reason"`
+	PlanHashBefore          string `json:"plan_hash_before"`
+	PlanHashAfter           string `json:"plan_hash_after"`
+	PlanDiffSummary         string `json:"plan_diff_summary"`
+	PriorRetryCount         int    `json:"prior_retry_count"`
+	PriorRetryReason        string `json:"prior_retry_reason"`
+	ConsecutiveVerifyFails  int    `json:"consecutive_verify_fails"`
+	BackpressureInjected    bool   `json:"backpressure_injected"`
 }
 
 func loadState() raufState {

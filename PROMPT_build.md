@@ -21,6 +21,31 @@ You MUST:
 
 ---
 
+## Backpressure Handling (MANDATORY)
+
+If the prompt contains a `## Backpressure Pack` section, you MUST handle it FIRST:
+
+1. **Guardrail Failure**: Stop and make the smallest change that resolves the guardrail.
+   Do NOT repeat the blocked action.
+2. **Verify Failure**: Do NOT start new features. Fix the errors until verify passes.
+3. **Verify Required**: Ensure the current task has valid Verify commands that run successfully.
+4. **Plan Drift**: Keep plan edits minimal and justify them explicitly in your response.
+
+### Required Output Convention
+
+When responding to backpressure, begin your response with:
+
+```
+## Backpressure Response
+
+- [ ] Acknowledged: [brief summary of what failed]
+- [ ] Action: [what you are doing to fix it]
+```
+
+Then proceed with your work.
+
+---
+
 ## Build Context (auto-generated)
 
 Plan: {{.PlanPath}}

@@ -83,6 +83,12 @@ type retryConfig struct {
 	Match       []string
 }
 
+type harnessResult struct {
+	Output      string
+	RetryCount  int
+	RetryReason string
+}
+
 func main() {
 	cfg, err := parseArgs(os.Args[1:])
 	if err != nil {
@@ -688,33 +694,36 @@ func parseBool(value string) (bool, bool) {
 	}
 }
 
-func runHarness(ctx context.Context, prompt string, harness, harnessArgs, model string, yoloEnabled bool, logFile *os.File, retry retryConfig, runner runtimeExec) (string, error) {
+func runHarness(ctx context.Context, prompt string, harness, harnessArgs, model string, yoloEnabled bool, logFile *os.File, retry retryConfig, runner runtimeExec) (harnessResult, error) {
 	attempts := 0
+	matchedToken := ""
 	for {
 		output, err := runHarnessOnce(ctx, prompt, harness, harnessArgs, model, yoloEnabled, logFile, runner)
 		if err == nil {
-			return output, nil
+			return harnessResult{Output: output, RetryCount: attempts, RetryReason: matchedToken}, nil
 		}
 		if ctx.Err() != nil {
-			return output, err
+			return harnessResult{Output: output, RetryCount: attempts, RetryReason: matchedToken}, err
 		}
 		if !retry.Enabled || retry.MaxAttempts == 0 {
-			return output, err
+			return harnessResult{Output: output, RetryCount: attempts, RetryReason: matchedToken}, err
 		}
-		if !shouldRetryOutput(output, retry.Match) {
-			return output, err
+		token, shouldRetry := retryMatchToken(output, retry.Match)
+		if !shouldRetry {
+			return harnessResult{Output: output, RetryCount: attempts, RetryReason: matchedToken}, err
 		}
+		matchedToken = token
 		if attempts >= retry.MaxAttempts {
-			return output, err
+			return harnessResult{Output: output, RetryCount: attempts, RetryReason: matchedToken}, err
 		}
 		attempts++
 		delay := backoffDuration(retry.BackoffBase, retry.BackoffMax, attempts, retry.Jitter)
-		fmt.Fprintf(os.Stderr, "Harness error matched retry rule; sleeping %s before retry %d/%d\n", delay, attempts, retry.MaxAttempts)
+		fmt.Fprintf(os.Stderr, "Harness error matched retry rule (%s); sleeping %s before retry %d/%d\n", token, delay, attempts, retry.MaxAttempts)
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return output, ctx.Err()
+			return harnessResult{Output: output, RetryCount: attempts, RetryReason: matchedToken}, ctx.Err()
 		case <-timer.C:
 		}
 	}
@@ -1069,9 +1078,9 @@ func (b *limitedBuffer) String() string {
 	return string(b.buf)
 }
 
-func shouldRetryOutput(output string, match []string) bool {
+func retryMatchToken(output string, match []string) (string, bool) {
 	if len(match) == 0 {
-		return false
+		return "", false
 	}
 	lower := strings.ToLower(output)
 	for _, token := range match {
@@ -1080,13 +1089,13 @@ func shouldRetryOutput(output string, match []string) bool {
 			continue
 		}
 		if token == "*" {
-			return true
+			return "*", true
 		}
 		if strings.Contains(lower, strings.ToLower(token)) {
-			return true
+			return token, true
 		}
 	}
-	return false
+	return "", false
 }
 
 func backoffDuration(base, max time.Duration, attempt int, jitter bool) time.Duration {
