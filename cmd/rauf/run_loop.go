@@ -16,6 +16,8 @@ type iterationResult struct {
 	Stalled      bool
 	HeadBefore   string
 	HeadAfter    string
+	NoProgress   int
+	ExitReason   string
 }
 
 const completionSentinel = "RAUF_COMPLETE"
@@ -39,8 +41,11 @@ func runStrategy(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, stat
 			model = step.Model
 		}
 		for i := 0; i < maxIterations; i++ {
-			result := runMode(modeCfg, fileCfg, runner, state, gitAvailable, branch, planPath, model, yoloEnabled, harness, harnessArgs, noPush, logDir, retryEnabled, retryMaxAttempts, retryBackoffBase, retryBackoffMax, retryJitter, retryMatch)
+			result := runMode(modeCfg, fileCfg, runner, state, gitAvailable, branch, planPath, model, yoloEnabled, harness, harnessArgs, noPush, logDir, retryEnabled, retryMaxAttempts, retryBackoffBase, retryBackoffMax, retryJitter, retryMatch, lastResult.NoProgress)
 			lastResult = result
+			if result.ExitReason == "no_progress" {
+				break
+			}
 			if !shouldContinueUntil(step, result) {
 				break
 			}
@@ -48,9 +53,9 @@ func runStrategy(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, stat
 	}
 }
 
-func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state raufState, gitAvailable bool, branch, planPath, model string, yoloEnabled bool, harness, harnessArgs string, noPush bool, logDir string, retryEnabled bool, retryMaxAttempts int, retryBackoffBase, retryBackoffMax time.Duration, retryJitter bool, retryMatch []string) iterationResult {
+func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state raufState, gitAvailable bool, branch, planPath, model string, yoloEnabled bool, harness, harnessArgs string, noPush bool, logDir string, retryEnabled bool, retryMaxAttempts int, retryBackoffBase, retryBackoffMax time.Duration, retryJitter bool, retryMatch []string, startNoProgress int) iterationResult {
 	iteration := 0
-	noProgress := 0
+	noProgress := startNoProgress
 	maxNoProgress := fileCfg.NoProgressIters
 	if maxNoProgress <= 0 {
 		maxNoProgress = 2
@@ -69,6 +74,13 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 			break
 		}
 		iterNum := iteration + 1
+
+		if cfg.mode == "plan" || cfg.mode == "build" {
+			if err := lintSpecs(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
 
 		if cfg.mode == "build" {
 			if hasPlanFile(planPath) && !hasUncheckedTasks(planPath) && state.LastVerificationStatus != "fail" {
@@ -98,30 +110,30 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 		needVerifyInstruction := ""
 		missingVerify := false
 		lintPolicy := ""
-			if cfg.mode == "build" {
-				if active, ok, err := readActiveTask(planPath); err == nil && ok {
-					task = active
-					verifyCmds = append([]string{}, active.VerifyCmds...)
-					lintPolicy = normalizePlanLintPolicy(fileCfg)
-					if lintPolicy != "off" {
-						issues := lintPlanTask(task)
-						if issues.MultipleVerify || issues.MultipleOutcome {
-							var warnings []string
-							if issues.MultipleVerify {
-								warnings = append(warnings, "multiple Verify commands")
-							}
-							if issues.MultipleOutcome {
-								warnings = append(warnings, "multiple Outcome lines")
-							}
-							fmt.Fprintf(os.Stderr, "Plan lint: %s\n", strings.Join(warnings, "; "))
-							if lintPolicy == "fail" {
-								os.Exit(1)
-							}
+		if cfg.mode == "build" {
+			if active, ok, err := readActiveTask(planPath); err == nil && ok {
+				task = active
+				verifyCmds = append([]string{}, active.VerifyCmds...)
+				lintPolicy = normalizePlanLintPolicy(fileCfg)
+				if lintPolicy != "off" {
+					issues := lintPlanTask(task)
+					if issues.MultipleVerify || issues.MultipleOutcome {
+						var warnings []string
+						if issues.MultipleVerify {
+							warnings = append(warnings, "multiple Verify commands")
+						}
+						if issues.MultipleOutcome {
+							warnings = append(warnings, "multiple Outcome lines")
+						}
+						fmt.Fprintf(os.Stderr, "Plan lint: %s\n", strings.Join(warnings, "; "))
+						if lintPolicy == "fail" {
+							os.Exit(1)
 						}
 					}
-				} else if err != nil {
-					fmt.Fprintf(os.Stderr, "Plan lint: unable to parse active task: %v\n", err)
 				}
+			} else if err != nil {
+				fmt.Fprintf(os.Stderr, "Plan lint: unable to parse active task: %v\n", err)
+			}
 			verifyPolicy = normalizeVerifyMissingPolicy(fileCfg)
 			if len(verifyCmds) == 0 && (verifyPolicy == "fallback") {
 				verifyCmds = readAgentsVerifyFallback("AGENTS.md")
@@ -245,8 +257,18 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 		}
 
 		completionSignal := ""
+		completionOk := true
+		completionSpecs := []string{}
+		completionArtifacts := []string{}
 		if hasCompletionSentinel(output) {
 			completionSignal = completionSentinel
+			if cfg.mode == "build" {
+				var reason string
+				completionOk, reason, completionSpecs, completionArtifacts = checkCompletionArtifacts(task.SpecRefs)
+				if !completionOk {
+					fmt.Fprintf(os.Stderr, "Completion blocked: %s\n", reason)
+				}
+			}
 		}
 
 		prevVerifyStatus := state.LastVerificationStatus
@@ -352,8 +374,8 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 			progress = true
 		}
 		exitReason := ""
-		if completionSignal != "" && (cfg.mode != "build" || (!missingVerify && verifyStatus != "fail")) {
-			exitReason = "agent_complete"
+		if completionSignal != "" && completionOk && (cfg.mode != "build" || (!missingVerify && verifyStatus != "fail")) {
+			exitReason = "completion_contract_satisfied"
 		}
 		if !progress {
 			noProgress++
@@ -379,24 +401,36 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 		}
 
 		writeLogEntry(logFile, logEntry{
-			Type:             "iteration_end",
-			Mode:             cfg.mode,
-			Iteration:        iterNum,
-			VerifyCmd:        formatVerifyCommands(verifyCmds),
-			VerifyStatus:     verifyStatus,
-			VerifyOutput:     verifyOutput,
-			PlanHash:         planHashAfter,
-			PromptHash:       promptHash,
-			Branch:           branch,
-			HeadBefore:       headBefore,
-			HeadAfter:        headAfter,
-			Guardrail:        guardrailReason,
-			ExitReason:       exitReason,
-			CompletionSignal: completionSignal,
+			Type:                "iteration_end",
+			Mode:                cfg.mode,
+			Iteration:           iterNum,
+			VerifyCmd:           formatVerifyCommands(verifyCmds),
+			VerifyStatus:        verifyStatus,
+			VerifyOutput:        verifyOutput,
+			PlanHash:            planHashAfter,
+			PromptHash:          promptHash,
+			Branch:              branch,
+			HeadBefore:          headBefore,
+			HeadAfter:           headAfter,
+			Guardrail:           guardrailReason,
+			ExitReason:          exitReason,
+			CompletionSignal:    completionSignal,
+			CompletionSpecs:     completionSpecs,
+			CompletionArtifacts: completionArtifacts,
 		})
 
 		if closeErr := logFile.Close(); closeErr != nil {
 			fmt.Fprintln(os.Stderr, closeErr)
+		}
+
+		lastResult = iterationResult{
+			VerifyStatus: verifyStatus,
+			VerifyOutput: verifyOutput,
+			Stalled:      stalled,
+			HeadBefore:   headBefore,
+			HeadAfter:    headAfter,
+			NoProgress:   noProgress,
+			ExitReason:   exitReason,
 		}
 
 		if exitReason != "" {
@@ -405,20 +439,13 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 				fmt.Printf("No progress after %d iterations. Exiting.\n", maxNoProgress)
 			case "no_unchecked_tasks":
 				fmt.Println("No unchecked tasks remaining. Exiting.")
-			case "agent_complete":
-				fmt.Println("Agent requested completion. Exiting.")
+			case "completion_contract_satisfied":
+				fmt.Println("Completion contract satisfied. Exiting.")
 			}
 			break
 		}
 
 		iteration++
-		lastResult = iterationResult{
-			VerifyStatus: verifyStatus,
-			VerifyOutput: verifyOutput,
-			Stalled:      stalled,
-			HeadBefore:   headBefore,
-			HeadAfter:    headAfter,
-		}
 		fmt.Printf("\n\n======================== LOOP %d ========================\n\n", iteration)
 	}
 
@@ -511,6 +538,9 @@ func normalizeVerifyMissingPolicy(cfg runtimeConfig) string {
 	}
 	switch policy {
 	case "strict", "agent_enforced", "fallback":
+		if policy == "fallback" && !cfg.AllowVerifyFallback {
+			return "strict"
+		}
 		return policy
 	default:
 		return "strict"

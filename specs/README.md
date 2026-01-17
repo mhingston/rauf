@@ -5,6 +5,7 @@ This folder contains one spec per topic of concern.
 ## Template
 
 All specs must follow `specs/_TEMPLATE.md` and include frontmatter.
+Completion contracts and verification commands are mandatory to define "done."
 
 ## Approval Gate
 

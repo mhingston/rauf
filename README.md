@@ -35,21 +35,34 @@ Each phase is isolated and enforced.
 - **Automatic Context Management:** Native support for Repo Mapping and Spec Indexing ensures the agent always knows exactly where it is and what its source of truth is.
 - **Strict Isolation:** Built-in support for Docker runtimes ensures agent commands are sandboxed, protecting your host machine while enabling autonomous execution.
 - **Auditability:** Automatic commit-per-task logic creates a clean, verifiable git history of the agent's reasoning and implementation steps.
+- **Completion Contracts:** Specs require explicit completion criteria with concrete verification commands, preventing ambiguous "done" states.
 
 ## Loop mechanics
 
 Each iteration is a fresh harness run. The runner re-reads repo state from disk,
 does one unit of work, then exits. The only state that carries across iterations
-is via files (especially `IMPLEMENTATION_PLAN.md`) and git history.
+is via files (especially `IMPLEMENTATION_PLAN.md`) and git history, keeping
+context and memory filesystem-centered.
 
 Looping does not run forever by default. The runner stops when max iterations
 is reached, when there are no unchecked tasks in build mode, or when an
 iteration makes no changes (no new commit, clean working tree, no plan changes).
+In strategy mode, the no-progress counter carries across steps until progress or exit.
 Ctrl+C interrupts the current run and exits immediately.
 
 Harness errors are not retried automatically unless you enable bounded retries
 via config or env. If the harness exits non-zero (including rate limits), the
 run stops and returns a failure by default.
+
+## Completion contracts
+
+Every spec must define how "done" is objectively detected. This keeps the loop
+finite and makes agent output verifiable.
+
+Completion contracts should include:
+- The explicit success condition (what is true when the task is complete)
+- The exact `Verify:` command(s) used to validate it
+- Any completion flags or artifacts that must exist
 
 ## Quick start
 
@@ -73,6 +86,7 @@ rauf 5
 - `IMPLEMENTATION_PLAN.md` — executable task list (or `.rauf/IMPLEMENTATION_PLAN.md` for plan-work)
 - `AGENTS.md`              — operational contract
 - `PROMPT_*.md`            — agent instructions
+- `branch.<name>.raufPlanPath` (git config) should be repo-relative
 
 Task format note: unchecked tasks must use `- [ ]` or `- [x]` for rauf to detect them.
 
@@ -93,6 +107,13 @@ See `rauf.yaml` for details.
 - Planner creates tasks without Verify → fix spec or plan
 - Builder makes no changes → plan/spec likely already satisfied
 - Infinite loops → check verification commands or harness output
+
+## Safety and control
+
+`rauf` ships guardrails so autonomous loops stay predictable:
+- Tiered autonomy via `yolo` and runtime isolation (host vs. docker)
+- Circuit breakers via `max_files_changed`, `max_commits_per_iteration`, and `no_progress_iterations`
+- Hard limits via per-step `iterations` and `until` conditions in strategy mode
 
 ## Config (rauf.yaml)
 
@@ -144,6 +165,7 @@ Notes:
 - `plan_lint_policy` controls whether non-atomic plan tasks are warned or fail the build; default `warn`.
 - `runtime: docker-persist` reuses a long-lived container; stop/remove it with `docker stop <name>` / `docker rm <name>` if needed.
 - Build agents can emit `RAUF_COMPLETE` to end an iteration early after finishing work.
+- When `RAUF_COMPLETE` is accepted in build mode, logs record `exit_reason: completion_contract_satisfied` plus `completion_specs` and `completion_artifacts`.
 - `.rauf/context.md` (optional) is injected into prompts as additional context when present.
 - `.rauf/state.md` is a human-readable summary of the latest state and verification output.
 

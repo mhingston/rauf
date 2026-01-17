@@ -324,7 +324,7 @@ func main() {
 		return
 	}
 
-	runMode(cfg, fileCfg, runner, state, gitAvailable, branch, planPath, model, yoloEnabled, harness, harnessArgs, noPush, logDir, retryEnabled, retryMaxAttempts, retryBackoffBase, retryBackoffMax, retryJitter, retryMatch)
+	runMode(cfg, fileCfg, runner, state, gitAvailable, branch, planPath, model, yoloEnabled, harness, harnessArgs, noPush, logDir, retryEnabled, retryMaxAttempts, retryBackoffBase, retryBackoffMax, retryJitter, retryMatch, 0)
 }
 
 func parseArgs(args []string) (modeConfig, error) {
@@ -785,6 +785,14 @@ func defaultModel(mode string) string {
 }
 
 func gitOutput(args ...string) (string, error) {
+	output, err := gitOutputRaw(args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
+}
+
+func gitOutputRaw(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Env = os.Environ()
 	var out bytes.Buffer
@@ -793,7 +801,7 @@ func gitOutput(args ...string) (string, error) {
 	if err := cmd.Run(); err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(out.String()), nil
+	return out.String(), nil
 }
 
 func gitPush(branch string) error {
@@ -1770,7 +1778,17 @@ Contract format: <TypeScript | JSON Schema | OpenAPI | SQL | UI State | CLI | Ot
 
 <contract content here>
 
-## 4. Scenarios (Acceptance Criteria)
+## 4. Completion Contract
+Success condition:
+- <state or output that must be true>
+
+Verification commands:
+- <exact command(s) to prove completion>
+
+Artifacts/flags:
+- <files, markers, or outputs that must exist>
+
+## 5. Scenarios (Acceptance Criteria)
 ### Scenario: <name>
 Given ...
 When ...
@@ -1779,13 +1797,13 @@ Then ...
 Verification:
 - <exact command(s) to prove this scenario> (or "TBD: add harness")
 
-## 5. Constraints / NFRs
+## 6. Constraints / NFRs
 - Performance:
 - Security:
 - Compatibility:
 - Observability:
 
-## 6. Open Questions / Assumptions
+## 7. Open Questions / Assumptions
 - Assumption:
 - Open question:
 `
@@ -1797,6 +1815,7 @@ This folder contains one spec per topic of concern.
 ## Template
 
 All specs must follow "specs/_TEMPLATE.md" and include frontmatter.
+Completion contracts and verification commands are mandatory to define "done."
 
 ## Approval Gate
 

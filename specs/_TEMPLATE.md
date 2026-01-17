@@ -18,7 +18,17 @@ Contract format: <TypeScript | JSON Schema | OpenAPI | SQL | UI State | CLI | Ot
 
 <contract content here>
 
-## 4. Scenarios (Acceptance Criteria)
+## 4. Completion Contract
+Success condition:
+- <state or output that must be true>
+
+Verification commands:
+- <exact command(s) to prove completion>
+
+Artifacts/flags:
+- <files, markers, or outputs that must exist>
+
+## 5. Scenarios (Acceptance Criteria)
 ### Scenario: <name>
 Given ...
 When ...
@@ -27,12 +37,12 @@ Then ...
 Verification:
 - <exact command(s) to prove this scenario> (or "TBD: add harness")
 
-## 5. Constraints / NFRs
+## 6. Constraints / NFRs
 - Performance:
 - Security:
 - Compatibility:
 - Observability:
 
-## 6. Open Questions / Assumptions
+## 7. Open Questions / Assumptions
 - Assumption:
 - Open question:

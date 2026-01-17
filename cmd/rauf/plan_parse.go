@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -130,7 +129,18 @@ func countOutcomeLines(lines []string) int {
 
 func isVerifyPlaceholder(value string) bool {
 	value = strings.ToLower(strings.TrimSpace(value))
-	return strings.Contains(value, "tbd")
+	if !strings.HasPrefix(value, "tbd") {
+		return false
+	}
+	if len(value) == 3 {
+		return true
+	}
+	switch value[3] {
+	case ' ', ':', '-':
+		return true
+	default:
+		return false
+	}
 }
 
 func splitSpecPath(value string) (string, bool) {
@@ -155,9 +165,13 @@ func extractFileMentions(lines []string) []string {
 			if _, ok := seen[path]; ok {
 				continue
 			}
-			if _, err := os.Stat(path); err == nil {
+			absPath, ok := resolveRepoPath(path)
+			if !ok {
+				continue
+			}
+			if _, err := os.Stat(absPath); err == nil {
 				seen[path] = struct{}{}
-				paths = append(paths, filepath.Clean(path))
+				paths = append(paths, repoRelativePath(absPath))
 			}
 		}
 	}

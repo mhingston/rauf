@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -23,12 +24,16 @@ func enforceGuardrails(cfg runtimeConfig, headBefore, headAfter string) (bool, s
 		if names, err := gitOutput("diff", "--name-only", headBefore+".."+headAfter); err == nil {
 			files = append(files, splitLines(names)...)
 		}
-	} else if status, err := gitOutput("status", "--porcelain"); err == nil {
-		for _, line := range splitLines(status) {
+	} else if status, err := gitOutputRaw("status", "--porcelain"); err == nil {
+		for _, line := range splitStatusLines(status) {
 			if len(line) < 4 {
 				continue
 			}
-			files = append(files, strings.TrimSpace(line[3:]))
+			path := parseStatusPath(line[3:])
+			if path == "" {
+				continue
+			}
+			files = append(files, path)
 		}
 	}
 
@@ -37,13 +42,27 @@ func enforceGuardrails(cfg runtimeConfig, headBefore, headAfter string) (bool, s
 	}
 
 	if len(cfg.ForbiddenPaths) > 0 {
+		root, rootErr := os.Getwd()
 		for _, file := range files {
+			fileClean := filepath.Clean(file)
+			fileAbs := fileClean
+			if rootErr == nil && !filepath.IsAbs(fileClean) {
+				fileAbs = filepath.Join(root, fileClean)
+			}
 			for _, forbidden := range cfg.ForbiddenPaths {
-				forbidden = strings.TrimSpace(forbidden)
+				forbidden = filepath.Clean(strings.TrimSpace(forbidden))
 				if forbidden == "" {
 					continue
 				}
-				if strings.HasPrefix(file, forbidden) {
+				if rootErr == nil {
+					forbiddenAbs := forbidden
+					if !filepath.IsAbs(forbidden) {
+						forbiddenAbs = filepath.Join(root, forbidden)
+					}
+					if fileAbs == forbiddenAbs || strings.HasPrefix(fileAbs, forbiddenAbs+string(filepath.Separator)) {
+						return false, "forbidden_path:" + forbidden
+					}
+				} else if fileClean == forbidden || strings.HasPrefix(fileClean, forbidden+string(filepath.Separator)) {
 					return false, "forbidden_path:" + forbidden
 				}
 			}
@@ -67,10 +86,18 @@ func enforceMissingVerifyGuardrail(planPath, headBefore, headAfter string, planC
 	if !planChanged {
 		return false, "missing_verify_plan_not_updated"
 	}
+	root, rootErr := os.Getwd()
 	planPath = filepath.Clean(planPath)
+	if rootErr == nil && !filepath.IsAbs(planPath) {
+		planPath = filepath.Join(root, planPath)
+	}
 	files := listChangedFiles(headBefore, headAfter)
 	for _, file := range files {
-		if filepath.Clean(file) != planPath {
+		path := filepath.Clean(file)
+		if rootErr == nil && !filepath.IsAbs(path) {
+			path = filepath.Join(root, path)
+		}
+		if path != planPath {
 			return false, "missing_verify_non_plan_change"
 		}
 	}
@@ -93,8 +120,8 @@ func listChangedFiles(headBefore, headAfter string) []string {
 		if names, err := gitOutput("diff", "--name-only", headBefore+".."+headAfter); err == nil {
 			files = append(files, splitLines(names)...)
 		}
-	} else if status, err := gitOutput("status", "--porcelain"); err == nil {
-		for _, line := range splitLines(status) {
+	} else if status, err := gitOutputRaw("status", "--porcelain"); err == nil {
+		for _, line := range splitStatusLines(status) {
 			if len(line) < 4 {
 				continue
 			}
@@ -129,6 +156,22 @@ func splitLines(value string) []string {
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func splitStatusLines(value string) []string {
+	if value == "" {
+		return nil
+	}
+	lines := strings.Split(value, "\n")
+	out := []string{}
+	for _, line := range lines {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
 		out = append(out, line)

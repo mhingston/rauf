@@ -134,7 +134,11 @@ func readSpecContexts(paths []string, maxBytes int) string {
 		if _, ok := seen[path]; ok {
 			continue
 		}
-		data, err := os.ReadFile(path)
+		absPath, ok := resolveRepoPath(path)
+		if !ok {
+			continue
+		}
+		data, err := os.ReadFile(absPath)
 		if err != nil {
 			continue
 		}
@@ -145,7 +149,7 @@ func readSpecContexts(paths []string, maxBytes int) string {
 			continue
 		}
 		b.WriteString("#### ")
-		b.WriteString(path)
+		b.WriteString(repoRelativePath(absPath))
 		b.WriteString("\n\n```")
 		b.WriteString(chunk)
 		b.WriteString("\n```\n\n")
@@ -170,7 +174,11 @@ func readRelevantFiles(task planTask, gitAvailable bool, maxBytes int) string {
 		if _, ok := seen[path]; ok {
 			continue
 		}
-		data, err := os.ReadFile(path)
+		absPath, ok := resolveRepoPath(path)
+		if !ok {
+			continue
+		}
+		data, err := os.ReadFile(absPath)
 		if err != nil {
 			continue
 		}
@@ -180,7 +188,7 @@ func readRelevantFiles(task planTask, gitAvailable bool, maxBytes int) string {
 			continue
 		}
 		b.WriteString("#### ")
-		b.WriteString(path)
+		b.WriteString(repoRelativePath(absPath))
 		b.WriteString("\n\n```")
 		b.WriteString(chunk)
 		b.WriteString("\n```\n\n")
@@ -395,4 +403,50 @@ func normalizeVerifyOutput(output string) string {
 		return ""
 	}
 	return truncateTail(output, maxVerifyOutput)
+}
+
+func resolveRepoPath(path string) (string, bool) {
+	root, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	clean := filepath.Clean(path)
+	if filepath.IsAbs(clean) {
+		if !isWithinRoot(root, clean) {
+			return "", false
+		}
+		return clean, true
+	}
+	abs := filepath.Join(root, clean)
+	if !isWithinRoot(root, abs) {
+		return "", false
+	}
+	return abs, true
+}
+
+func repoRelativePath(absPath string) string {
+	root, err := os.Getwd()
+	if err != nil {
+		return absPath
+	}
+	rel, err := filepath.Rel(root, absPath)
+	if err != nil {
+		return absPath
+	}
+	return filepath.Clean(rel)
+}
+
+func isWithinRoot(root, target string) bool {
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	rel = filepath.Clean(rel)
+	if rel == "." {
+		return true
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
 }
