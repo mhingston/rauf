@@ -98,6 +98,17 @@ The optional `[N]` argument limits iterations (e.g., `rauf plan 3` runs up to 3 
 | `rauf help` | Show usage |
 | `rauf version` | Show version |
 
+
+## CLI Options
+
+| Option | Description |
+|--------|-------------|
+| `--quiet` | Suppress logging output |
+| `--json` | Output structured JSON summary (implies --quiet) |
+| `--report <path>` | Write detailed run statistics to JSON file |
+| `--timeout <duration>` | Overall timeout (e.g. 10m) |
+| `--attempt-timeout <duration>` | Timeout for individual harness runs (e.g. 2m) |
+
 ## Strategy mode
 
 When `strategy:` is defined in config and no explicit mode is given, rauf runs a sequence of steps:
@@ -461,17 +472,7 @@ Environment overrides:
 | `RAUF_ATTEMPT_TIMEOUT` | Attempt timeout | - |
 | `RAUF_REPORT_PATH` | JSON report path | - |
 
-## CLI Improvements
 
-### Output control
-- `--quiet` / `--json`: Suppress logging and output structured JSON summary.
-- `--report <path>`: Write detailed run statistics (iterations, attempts, exit reasons) to a JSON file.
-
-### Timeouts
-- `--timeout <duration>`: Overall timeout for the command.
-- `--attempt-timeout <duration>`: Timeout for individual harness runs.
-
-## Common failure modes
 
 | Symptom | Likely Cause | Fix |
 |---------|--------------|-----|

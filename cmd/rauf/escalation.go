@@ -11,7 +11,7 @@ type escalationConfig struct {
 	ConsecutiveVerifyFails int // Trigger: escalate after N consecutive verify failures
 	NoProgressIters        int // Trigger: escalate after N no-progress iterations
 	GuardrailFailures      int // Trigger: escalate after N consecutive guardrail failures
-	MinStrongIterations    int // Minimum iterations to stay on strong model / wait before de-escalating
+	CooldownIters          int // Minimum iterations to stay on strong model / wait before de-escalating
 	MaxEscalations         int // Maximum number of escalations per run
 }
 
@@ -22,7 +22,7 @@ func defaultEscalationConfig() escalationConfig {
 		ConsecutiveVerifyFails: 2,
 		NoProgressIters:        2,
 		GuardrailFailures:      2,
-		MinStrongIterations:    2,
+		CooldownIters:          2,
 		MaxEscalations:         2,
 	}
 }
@@ -251,11 +251,11 @@ func updateModelEscalationState(state raufState, cfg runtimeConfig) (raufState, 
 			}
 			event.ToModel = cfg.ModelStrong
 			event.Reason = triggerReason
-			event.Cooldown = cfg.ModelEscalation.MinStrongIterations
+			event.Cooldown = cfg.ModelEscalation.CooldownIters
 
 			state.CurrentModel = cfg.ModelStrong
 			state.EscalationCount++
-			state.MinStrongIterationsRemaining = cfg.ModelEscalation.MinStrongIterations
+			state.MinStrongIterationsRemaining = cfg.ModelEscalation.CooldownIters
 			state.LastEscalationReason = triggerReason
 		}
 	} else if suppressed != "" {

@@ -333,12 +333,12 @@ var runMode = func(parentCtx context.Context, cfg modeConfig, fileCfg runtimeCon
 						ToModel:          fileCfg.ModelStrong,
 						EscalationReason: reason,
 						EscalationCount:  state.EscalationCount + 1,
-						Cooldown:         fileCfg.ModelEscalation.MinStrongIterations,
+						Cooldown:         fileCfg.ModelEscalation.CooldownIters,
 					})
 
 					state.CurrentModel = fileCfg.ModelStrong
 					state.EscalationCount++
-					state.MinStrongIterationsRemaining = fileCfg.ModelEscalation.MinStrongIterations
+					state.MinStrongIterationsRemaining = fileCfg.ModelEscalation.CooldownIters
 					state.LastEscalationReason = reason
 					escalated = true
 					escalationReason = reason

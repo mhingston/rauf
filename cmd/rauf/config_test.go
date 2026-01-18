@@ -39,7 +39,7 @@ model_escalation:
 	if err != nil {
 		t.Fatalf("parseConfigBytes failed: %v", err)
 	}
-	if !cfg.ModelEscalation.Enabled || cfg.ModelEscalation.MinStrongIterations != 5 || cfg.ModelEscalation.MaxEscalations != 3 || cfg.ModelEscalation.ConsecutiveVerifyFails != 1 {
+	if !cfg.ModelEscalation.Enabled || cfg.ModelEscalation.CooldownIters != 5 || cfg.ModelEscalation.MaxEscalations != 3 || cfg.ModelEscalation.ConsecutiveVerifyFails != 1 {
 		t.Errorf("unexpected escalation config: %+v", cfg.ModelEscalation)
 	}
 }

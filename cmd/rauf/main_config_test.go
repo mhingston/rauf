@@ -78,8 +78,8 @@ model_escalation:
 	if cfg.ModelEscalation.GuardrailFailures != 2 {
 		t.Errorf("got guardrail failures %d, want 2", cfg.ModelEscalation.GuardrailFailures)
 	}
-	if cfg.ModelEscalation.MinStrongIterations != 3 {
-		t.Errorf("got cooldown iters %d, want 3", cfg.ModelEscalation.MinStrongIterations)
+	if cfg.ModelEscalation.CooldownIters != 3 {
+		t.Errorf("got cooldown iters %d, want 3", cfg.ModelEscalation.CooldownIters)
 	}
 	if cfg.ModelEscalation.NoProgressIters != 4 {
 		t.Errorf("got no progress iters %d, want 4", cfg.ModelEscalation.NoProgressIters)

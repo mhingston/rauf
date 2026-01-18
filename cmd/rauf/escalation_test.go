@@ -223,7 +223,7 @@ func TestShouldEscalateModel_MinStrongIterationsActive(t *testing.T) {
 		ModelEscalation: escalationConfig{
 			Enabled:                true,
 			ConsecutiveVerifyFails: 2,
-			MinStrongIterations:    5,
+			CooldownIters:          5,
 			MaxEscalations:         5,
 		},
 		ModelStrong: "opus",
@@ -252,7 +252,7 @@ func TestShouldEscalateModel_CooldownPreventsToggle(t *testing.T) {
 		ModelEscalation: escalationConfig{
 			Enabled:                true,
 			ConsecutiveVerifyFails: 2,
-			MinStrongIterations:    3,
+			CooldownIters:          3,
 			MaxEscalations:         5,
 		},
 		ModelStrong: "opus",
@@ -319,8 +319,8 @@ func TestDefaultEscalationConfig(t *testing.T) {
 	if cfg.GuardrailFailures != 2 {
 		t.Errorf("default GuardrailFailures = %d, want 2", cfg.GuardrailFailures)
 	}
-	if cfg.MinStrongIterations != 2 {
-		t.Errorf("default MinStrongIterations = %d, want 2", cfg.MinStrongIterations)
+	if cfg.CooldownIters != 2 {
+		t.Errorf("default MinStrongIterations = %d, want 2", cfg.CooldownIters)
 	}
 	if cfg.MaxEscalations != 2 {
 		t.Errorf("default MaxEscalations = %d, want 2", cfg.MaxEscalations)
@@ -333,7 +333,7 @@ func TestUpdateEscalationState(t *testing.T) {
 			ConsecutiveVerifyFails: 2,
 			NoProgressIters:        2,
 			GuardrailFailures:      2,
-			MinStrongIterations:    2,
+			CooldownIters:          2,
 			MaxEscalations:         2,
 		},
 		ModelStrong: "opus",
@@ -422,8 +422,8 @@ func TestUpdateEscalationState_Suppression(t *testing.T) {
 func TestUpdateEscalationState_Deescalation(t *testing.T) {
 	cfg := runtimeConfig{
 		ModelEscalation: escalationConfig{
-			Enabled:             true,
-			MinStrongIterations: 5,
+			Enabled:       true,
+			CooldownIters: 5,
 		},
 		ModelStrong:  "opus",
 		ModelDefault: "sonnet",

@@ -47,7 +47,7 @@ const (
 	defaultPlanIterations      = 1
 )
 
-var version = "v1.3.0"
+var version = "v1.3.1"
 
 var defaultRetryMatch = []string{"rate limit", "429", "overloaded", "timeout"}
 
@@ -491,7 +491,7 @@ func loadConfig(path string) (runtimeConfig, bool, error) {
 		RetryBackoffMax:     30 * time.Second,
 		RetryJitter:         true,
 		RetryMatch:          append([]string(nil), defaultRetryMatch...),
-		NoProgressIters:     2,
+		NoProgressIters:     5,
 		OnVerifyFail:        "soft_reset",
 		VerifyMissingPolicy: "strict",
 		PlanLintPolicy:      "warn",
@@ -513,6 +513,84 @@ func loadConfig(path string) (runtimeConfig, bool, error) {
 	if q, ok := envBool("RAUF_QUIET"); ok {
 		cfg.Quiet = q
 	}
+	// Apply environment overrides
+	if h := envFirst("RAUF_HARNESS"); h != "" {
+		cfg.Harness = h
+	}
+	if ha := envFirst("RAUF_HARNESS_ARGS"); ha != "" {
+		cfg.HarnessArgs = ha
+	}
+	if np, ok := envBool("RAUF_NO_PUSH", "RAUF_SKIP_PUSH"); ok {
+		cfg.NoPush = np
+	}
+	if ld := envFirst("RAUF_LOG_DIR"); ld != "" {
+		cfg.LogDir = ld
+	}
+	if r := envFirst("RAUF_RUNTIME"); r != "" {
+		cfg.Runtime = r
+	}
+	if di := envFirst("RAUF_DOCKER_IMAGE"); di != "" {
+		cfg.DockerImage = di
+	}
+	if da := envFirst("RAUF_DOCKER_ARGS"); da != "" {
+		cfg.DockerArgs = da
+	}
+	if dc := envFirst("RAUF_DOCKER_CONTAINER"); dc != "" {
+		cfg.DockerContainer = dc
+	}
+	if ovf := envFirst("RAUF_ON_VERIFY_FAIL"); ovf != "" {
+		cfg.OnVerifyFail = ovf
+	}
+	if vmp := envFirst("RAUF_VERIFY_MISSING_POLICY"); vmp != "" {
+		cfg.VerifyMissingPolicy = vmp
+	}
+	if avf, ok := envBool("RAUF_ALLOW_VERIFY_FALLBACK"); ok {
+		cfg.AllowVerifyFallback = avf
+	}
+	if rvc, ok := envBool("RAUF_REQUIRE_VERIFY_ON_CHANGE"); ok {
+		cfg.RequireVerifyOnChange = rvc
+	}
+	if rvpu, ok := envBool("RAUF_REQUIRE_VERIFY_FOR_PLAN_UPDATE"); ok {
+		cfg.RequireVerifyForPlanUpdate = rvpu
+	}
+	if rty, ok := envBool("RAUF_RETRY"); ok {
+		cfg.RetryOnFailure = rty
+	}
+	if rm := envFirst("RAUF_RETRY_MAX"); rm != "" {
+		if v, err := strconv.Atoi(rm); err == nil && v >= 0 {
+			cfg.RetryMaxAttempts = v
+		}
+	}
+	if rbb := envFirst("RAUF_RETRY_BACKOFF_BASE"); rbb != "" {
+		if v, err := time.ParseDuration(rbb); err == nil {
+			cfg.RetryBackoffBase = v
+		}
+	}
+	if rbm := envFirst("RAUF_RETRY_BACKOFF_MAX"); rbm != "" {
+		if v, err := time.ParseDuration(rbm); err == nil {
+			cfg.RetryBackoffMax = v
+		}
+	}
+	if rnj, ok := envBool("RAUF_RETRY_NO_JITTER"); ok {
+		cfg.RetryJitter = !rnj // Invert logic as config is RetryJitter (enabled)
+		cfg.RetryJitterSet = true
+	}
+	if rmatch := envFirst("RAUF_RETRY_MATCH"); rmatch != "" {
+		cfg.RetryMatch = splitCommaList(rmatch)
+	}
+	if md := envFirst("RAUF_MODEL_DEFAULT"); md != "" {
+		cfg.ModelDefault = md
+	}
+	if ms := envFirst("RAUF_MODEL_STRONG"); ms != "" {
+		cfg.ModelStrong = ms
+	}
+	if mf := envFirst("RAUF_MODEL_FLAG"); mf != "" {
+		cfg.ModelFlag = mf
+	}
+	if me, ok := envBool("RAUF_MODEL_ESCALATION_ENABLED"); ok {
+		cfg.ModelEscalation.Enabled = me
+	}
+
 	return cfg, true, nil
 }
 
@@ -690,11 +768,11 @@ func parseConfigBytes(data []byte, cfg *runtimeConfig) error {
 				}
 			case "min_strong_iterations":
 				if v, err := strconv.Atoi(value); err == nil && v >= 0 {
-					cfg.ModelEscalation.MinStrongIterations = v
+					cfg.ModelEscalation.CooldownIters = v
 				}
 			case "cooldown_iters":
 				if v, err := strconv.Atoi(value); err == nil && v >= 0 {
-					cfg.ModelEscalation.MinStrongIterations = v
+					cfg.ModelEscalation.CooldownIters = v
 				}
 			case "max_escalations":
 				if v, err := strconv.Atoi(value); err == nil && v >= 0 {
