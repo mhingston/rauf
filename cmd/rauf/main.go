@@ -47,7 +47,7 @@ const (
 	defaultPlanIterations      = 1
 )
 
-var version = "v1.3.1"
+var version = "v1.3.2"
 
 var defaultRetryMatch = []string{"rate limit", "429", "overloaded", "timeout"}
 
@@ -975,11 +975,22 @@ var runHarnessOnce = func(ctx context.Context, prompt string, harness, harnessAr
 
 	buffer := &limitedBuffer{max: 1024 * 1024}
 
+	promptInArgs := false
+	for i, arg := range args {
+		if strings.Contains(arg, "{prompt}") {
+			args[i] = strings.ReplaceAll(arg, "{prompt}", prompt)
+			promptInArgs = true
+		}
+	}
+
 	cmd, err := runner.command(ctx, harness, args...)
 	if err != nil {
 		return "", err
 	}
-	cmd.Stdin = strings.NewReader(prompt)
+
+	if !promptInArgs {
+		cmd.Stdin = strings.NewReader(prompt)
+	}
 
 	var logWriter io.Writer = io.Discard
 	if logFile != nil {

@@ -255,12 +255,16 @@ harness: claude
 harness_args: "-p --output-format=stream-json --model sonnet --verbose"
 ```
 
-Or for other harnesses:
+### Argument injection
+
+If your harness requires the prompt as a command-line argument instead of via stdin (e.g. `opencode`), use the `{prompt}` placeholder:
 
 ```yaml
 harness: opencode
-harness_args: "run"
+harness_args: 'run "{prompt}"'
 ```
+
+When `{prompt}` is detected in `harness_args`, rauf injects the prompt there and skips writing to stdin.
 
 Environment variables:
 - `RAUF_HARNESS`: Harness command
