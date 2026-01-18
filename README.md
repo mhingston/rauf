@@ -260,9 +260,11 @@ harness_args: "-p --output-format=stream-json --model sonnet --verbose"
 If your harness requires the prompt as a command-line argument instead of via stdin (e.g. `opencode`), use the `{prompt}` placeholder:
 
 ```yaml
-harness: opencode
-harness_args: 'run "{prompt}"'
+harness: script
+harness_args: '-q /dev/null opencode run "{prompt}"'
 ```
+
+**Note:** `opencode` requires a pseudo-TTY to run, so we wrap it with `script`.
 
 When `{prompt}` is detected in `harness_args`, rauf injects the prompt there and skips writing to stdin.
 
