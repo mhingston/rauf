@@ -40,15 +40,19 @@ func readActiveTask(planPath string) (planTask, bool, error) {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if match := taskLine.FindStringSubmatch(line); match != nil {
-			if found {
-				break
+		// Skip task line matching while inside a code block to avoid
+		// incorrectly matching task-like content in code examples
+		if !inVerifyBlock {
+			if match := taskLine.FindStringSubmatch(line); match != nil {
+				if found {
+					break
+				}
+				found = true
+				collecting = true
+				task.TitleLine = strings.TrimSpace(match[1])
+				task.TaskBlock = append(task.TaskBlock, line)
+				continue
 			}
-			found = true
-			collecting = true
-			task.TitleLine = strings.TrimSpace(match[1])
-			task.TaskBlock = append(task.TaskBlock, line)
-			continue
 		}
 		if !collecting {
 			continue
@@ -73,12 +77,14 @@ func readActiveTask(planPath string) (planTask, bool, error) {
 		}
 		if match := verifyLine.FindStringSubmatch(line); match != nil {
 			raw := strings.TrimSpace(match[1])
-			raw = strings.Trim(raw, "`")
-			if raw == "" {
+			// Check for code block BEFORE stripping backticks
+			if raw == "" || strings.HasPrefix(raw, "```") {
 				inVerifyBlock = true
 				continue
 			}
-			if strings.HasPrefix(strings.TrimSpace(raw), "```") {
+			// Now strip inline backticks for single-line verify commands
+			raw = strings.Trim(raw, "`")
+			if raw == "" {
 				inVerifyBlock = true
 				continue
 			}

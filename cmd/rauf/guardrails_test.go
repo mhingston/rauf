@@ -65,7 +65,10 @@ func TestEnforceMissingVerifyGuardrailPlanPathRelative(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repoDir, planPath), []byte("# plan updated\n"), 0o644); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
-	files := listChangedFiles(head, head)
+	files, gitErr := listChangedFiles(head, head)
+	if gitErr {
+		t.Fatalf("listChangedFiles returned git error")
+	}
 	if len(files) != 1 || files[0] != planPath {
 		status, _ := gitOutput("status", "--porcelain")
 		t.Fatalf("unexpected changed files: %v (status=%q)", files, status)

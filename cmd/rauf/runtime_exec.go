@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -87,8 +88,13 @@ func (r runtimeExec) commandDockerRun(ctx context.Context, workdir string, name 
 	if uid, gid := hostUIDGID(); uid >= 0 && gid >= 0 {
 		dockerArgs = append(dockerArgs, "-u", fmt.Sprintf("%d:%d", uid, gid))
 	}
-	dockerArgs = append(dockerArgs, "-v", workdir+":/workspace", "-w", "/workspace")
+	// Format volume mount path appropriately for the platform
+	volumeMount := formatDockerVolume(workdir, "/workspace")
+	dockerArgs = append(dockerArgs, "-v", volumeMount, "-w", "/workspace")
 	if len(r.DockerArgs) > 0 {
+		if err := validateDockerArgs(r.DockerArgs); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		}
 		dockerArgs = append(dockerArgs, r.DockerArgs...)
 	}
 	dockerArgs = append(dockerArgs, r.DockerImage, name)
@@ -148,8 +154,13 @@ func (r runtimeExec) ensureDockerContainer(ctx context.Context, name, workdir st
 	if uid, gid := hostUIDGID(); uid >= 0 && gid >= 0 {
 		dockerArgs = append(dockerArgs, "-u", fmt.Sprintf("%d:%d", uid, gid))
 	}
-	dockerArgs = append(dockerArgs, "-v", workdir+":/workspace", "-w", "/workspace")
+	// Format volume mount path appropriately for the platform
+	volumeMount := formatDockerVolume(workdir, "/workspace")
+	dockerArgs = append(dockerArgs, "-v", volumeMount, "-w", "/workspace")
 	if len(r.DockerArgs) > 0 {
+		if err := validateDockerArgs(r.DockerArgs); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		}
 		dockerArgs = append(dockerArgs, r.DockerArgs...)
 	}
 	dockerArgs = append(dockerArgs, r.DockerImage, "sh", "-c", "tail -f /dev/null")
@@ -162,18 +173,16 @@ func (r runtimeExec) ensureDockerContainer(ctx context.Context, name, workdir st
 
 func (r runtimeExec) dockerContainerState(ctx context.Context, name string) (running bool, exists bool, err error) {
 	cmd := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}}", name)
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
 	output, cmdErr := cmd.Output()
 	if cmdErr != nil {
 		// Check if the error is because the container doesn't exist
+		stderr := stderrBuf.String()
+		if strings.Contains(stderr, "No such object") || strings.Contains(stderr, "not found") {
+			return false, false, nil
+		}
 		if exitErr, ok := cmdErr.(*exec.ExitError); ok {
-			// Safely handle potentially nil Stderr
-			stderr := ""
-			if exitErr.Stderr != nil {
-				stderr = string(exitErr.Stderr)
-			}
-			if strings.Contains(stderr, "No such object") || strings.Contains(stderr, "not found") {
-				return false, false, nil
-			}
 			// Exit code 1 with no matching stderr message - container doesn't exist
 			if exitErr.ExitCode() == 1 && stderr == "" {
 				return false, false, nil
@@ -184,4 +193,61 @@ func (r runtimeExec) dockerContainerState(ctx context.Context, name string) (run
 	}
 	value := strings.TrimSpace(string(output))
 	return value == "true", true, nil
+}
+
+// validateDockerArgs checks for potentially dangerous Docker arguments
+func validateDockerArgs(args []string) error {
+	// List of flags that could override security-sensitive settings
+	dangerousFlags := map[string]string{
+		"--privileged":   "grants full host access",
+		"--cap-add":      "adds container capabilities",
+		"--security-opt": "modifies security settings",
+		"--pid":          "shares host PID namespace",
+		"--network=host": "shares host network namespace",
+		"--ipc":          "shares IPC namespace",
+	}
+	for _, arg := range args {
+		for flag, desc := range dangerousFlags {
+			if arg == flag || strings.HasPrefix(arg, flag+"=") {
+				return fmt.Errorf("docker_args contains %s which %s", flag, desc)
+			}
+		}
+	}
+	return nil
+}
+
+// formatDockerVolume formats a volume mount string appropriately for the platform.
+// On Windows, Docker Desktop expects paths in a specific format.
+// On Unix, warns if the path contains colons which could be misinterpreted.
+func formatDockerVolume(hostPath, containerPath string) string {
+	if runtime.GOOS == "windows" {
+		// Docker Desktop on Windows accepts Windows paths directly in most cases,
+		// but for WSL2 backend, paths may need conversion. Docker Desktop handles
+		// this automatically for standard paths like C:\path.
+		// Just warn about unusual paths that might cause issues.
+		if !isWindowsAbsPath(hostPath) && strings.Contains(hostPath, ":") {
+			fmt.Fprintf(os.Stderr, "Warning: workdir %q has unusual format for Windows Docker volume mount\n", hostPath)
+		}
+	} else {
+		// On Unix, colons in paths are problematic as Docker uses colons as delimiters
+		if strings.Contains(hostPath, ":") {
+			fmt.Fprintf(os.Stderr, "Warning: workdir %q contains colons which may be misinterpreted by Docker volume mount\n", hostPath)
+		}
+	}
+	return hostPath + ":" + containerPath
+}
+
+// isWindowsAbsPath checks if a path looks like a Windows absolute path (e.g., C:\foo)
+func isWindowsAbsPath(path string) bool {
+	if len(path) < 3 {
+		return false
+	}
+	// Check for drive letter pattern: single letter followed by colon and backslash or slash
+	drive := path[0]
+	if (drive >= 'A' && drive <= 'Z') || (drive >= 'a' && drive <= 'z') {
+		if path[1] == ':' && (path[2] == '\\' || path[2] == '/') {
+			return true
+		}
+	}
+	return false
 }

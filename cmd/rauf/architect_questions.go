@@ -27,6 +27,15 @@ func maxArchitectQuestionsForState(state raufState) int {
 	return max
 }
 
+// runArchitectQuestions handles interactive Q&A during architect mode.
+// It extracts RAUF_QUESTION: lines from output and prompts the user for answers.
+//
+// Known limitation: Go's stdin reads are blocking and cannot be interrupted.
+// If the context is cancelled or timeout occurs while waiting for user input,
+// the goroutine reading stdin will remain blocked until the user eventually
+// provides input (at which point it will exit cleanly). This is a fundamental
+// limitation of Go's I/O model, not a bug. In practice, this only affects
+// scenarios where the user cancels during a question prompt.
 func runArchitectQuestions(ctx context.Context, runner runtimeExec, promptContent *string, output string, state raufState, harness, harnessArgs string, logFile *os.File, retryCfg retryConfig) (string, bool) {
 	reader := bufio.NewReader(os.Stdin)
 	totalAsked := 0
@@ -52,21 +61,31 @@ func runArchitectQuestions(ctx context.Context, runner runtimeExec, promptConten
 			totalAsked++
 			fmt.Printf("Architect question: %s\n> ", q)
 
-			// Use a goroutine to read input so we can also check for context cancellation
+			// Use a goroutine to read input so we can also check for context cancellation.
+			// Note: If context is cancelled or timeout occurs before user input, the goroutine
+			// will remain blocked on ReadString until input is received (stdin reads cannot be
+			// interrupted in Go). The goroutine will exit once any input is eventually provided.
 			inputChan := make(chan string, 1)
 			go func() {
 				text, _ := reader.ReadString('\n')
-				inputChan <- strings.TrimSpace(text)
+				select {
+				case inputChan <- strings.TrimSpace(text):
+				default:
+					// Channel not being read (timeout/cancel occurred), discard input
+				}
 			}()
 
 			var text string
 			select {
 			case <-ctx.Done():
+				// Goroutine may leak until user provides input; this is a known limitation
+				// of blocking stdin reads in Go.
 				return updatedOutput, totalAsked > 0
 			case text = <-inputChan:
 				// Got input from user
 			case <-time.After(5 * time.Minute):
-				// Timeout after 5 minutes of no input
+				// Timeout after 5 minutes of no input.
+				// Goroutine will exit once user eventually provides input.
 				text = "(no answer provided - timeout)"
 			}
 

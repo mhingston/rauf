@@ -166,6 +166,77 @@ retry_match: "rate limit,429"
 	}
 }
 
+func TestParseArgsExplicitMode(t *testing.T) {
+	// Numeric-only args should NOT set explicitMode (strategy can still apply)
+	cfg, err := parseArgs([]string{"5"})
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if cfg.explicitMode {
+		t.Errorf("numeric arg should not set explicitMode")
+	}
+
+	// Empty args should NOT set explicitMode
+	cfg, err = parseArgs([]string{})
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if cfg.explicitMode {
+		t.Errorf("empty args should not set explicitMode")
+	}
+
+	// Explicit mode names SHOULD set explicitMode
+	cfg, err = parseArgs([]string{"architect"})
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if !cfg.explicitMode {
+		t.Errorf("architect should set explicitMode")
+	}
+
+	cfg, err = parseArgs([]string{"plan"})
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if !cfg.explicitMode {
+		t.Errorf("plan should set explicitMode")
+	}
+
+	// plan with iterations should also set explicitMode
+	cfg, err = parseArgs([]string{"plan", "3"})
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if !cfg.explicitMode {
+		t.Errorf("plan with iterations should set explicitMode")
+	}
+}
+
+func TestIsWindowsAbsPath(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected bool
+	}{
+		{"C:\\foo\\bar", true},
+		{"D:/path/to/file", true},
+		{"c:\\lowercase", true},
+		{"/unix/path", false},
+		{"relative/path", false},
+		{"C:", false},       // Missing slash after colon
+		{"CC:\\foo", false}, // Invalid drive letter format
+		{"", false},
+		{"ab", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			result := isWindowsAbsPath(tc.path)
+			if result != tc.expected {
+				t.Errorf("isWindowsAbsPath(%q) = %v, want %v", tc.path, result, tc.expected)
+			}
+		})
+	}
+}
+
 func TestExtractQuestionsIgnoresCodeFences(t *testing.T) {
 	tests := []struct {
 		name     string

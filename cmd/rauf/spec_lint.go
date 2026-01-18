@@ -101,7 +101,21 @@ func parseCompletionContract(path string) (completionContract, error) {
 			if inSection {
 				break
 			}
-			if strings.Contains(strings.ToLower(title), "completion contract") {
+			// Match "Completion Contract" as the section title (case-insensitive)
+			// Handle numbered sections like "## 4. Completion Contract"
+			titleLower := strings.ToLower(title)
+			// Strip leading number and punctuation (e.g., "4. " or "4) ")
+			for i, r := range titleLower {
+				if r >= '0' && r <= '9' || r == '.' || r == ')' || r == ' ' || r == '\t' {
+					continue
+				}
+				titleLower = titleLower[i:]
+				break
+			}
+			if titleLower == "completion contract" ||
+				strings.HasPrefix(titleLower, "completion contract ") ||
+				strings.HasPrefix(titleLower, "completion contract:") ||
+				strings.HasPrefix(titleLower, "completion contract(") {
 				inSection = true
 				contract.Found = true
 				contract.SectionTitle = title
@@ -111,10 +125,6 @@ func parseCompletionContract(path string) (completionContract, error) {
 
 		if !inSection {
 			continue
-		}
-
-		if strings.HasPrefix(trimmed, "## ") && !inFence {
-			break
 		}
 
 		if trimmed == "" {
@@ -208,11 +218,17 @@ func checkCompletionArtifacts(specRefs []string) (bool, string, []string, []stri
 		}
 		missing := []string{}
 		for _, abs := range candidates {
-			if _, err := os.Stat(abs); err == nil {
+			info, err := os.Stat(abs)
+			if err == nil && info != nil {
 				verified = append(verified, repoRelativePath(abs))
 				continue
 			}
-			missing = append(missing, repoRelativePath(abs))
+			if os.IsNotExist(err) {
+				missing = append(missing, repoRelativePath(abs))
+			} else {
+				// Other error (permission denied, etc.)
+				failures = append(failures, fmt.Sprintf("%s: cannot access artifact %s: %v", spec, repoRelativePath(abs), err))
+			}
 		}
 		if len(missing) == 0 {
 			satisfied = append(satisfied, specLabel)

@@ -10,33 +10,49 @@ import (
 func enforceGuardrails(cfg runtimeConfig, headBefore, headAfter string) (bool, string) {
 	if cfg.MaxCommits > 0 {
 		count, err := gitOutput("rev-list", "--count", headBefore+".."+headAfter)
-		if err == nil {
-			if v := strings.TrimSpace(count); v != "" {
-				if n, err := strconv.Atoi(v); err == nil && n > cfg.MaxCommits {
-					return false, "max_commits_exceeded"
-				}
+		if err != nil {
+			// Fail-closed: if we can't check commit count, reject to be safe
+			return false, "git_error_commit_count"
+		}
+		if v := strings.TrimSpace(count); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > cfg.MaxCommits {
+				return false, "max_commits_exceeded"
 			}
 		}
 	}
 
 	files := []string{}
+	gitFilesErr := false
 	if headAfter != headBefore {
-		if names, err := gitOutput("diff", "--name-only", headBefore+".."+headAfter); err == nil {
+		names, err := gitOutput("diff", "--name-only", headBefore+".."+headAfter)
+		if err != nil {
+			gitFilesErr = true
+		} else {
 			files = append(files, splitLines(names)...)
 		}
-	} else if status, err := gitOutputRaw("status", "--porcelain"); err == nil {
-		for _, line := range splitStatusLines(status) {
-			// Git porcelain v1 format: "XY PATH" where XY are 2 status chars followed by space
-			// Minimum valid: 2 status + 1 space + 1 char path = 4 chars
-			if len(line) < 4 {
-				continue
+	} else {
+		status, err := gitOutputRaw("status", "--porcelain")
+		if err != nil {
+			gitFilesErr = true
+		} else {
+			for _, line := range splitStatusLines(status) {
+				// Git porcelain v1 format: "XY PATH" where XY are 2 status chars followed by space
+				// Minimum valid: 2 status + 1 space + 1 char path = 4 chars
+				if len(line) < 4 {
+					continue
+				}
+				path := parseStatusPath(line[3:])
+				if path == "" {
+					continue
+				}
+				files = append(files, path)
 			}
-			path := parseStatusPath(line[3:])
-			if path == "" {
-				continue
-			}
-			files = append(files, path)
 		}
+	}
+
+	// Fail-closed: if we can't get the file list and there are guardrails that depend on it
+	if gitFilesErr && (cfg.MaxFilesChanged > 0 || len(cfg.ForbiddenPaths) > 0) {
+		return false, "git_error_file_list"
 	}
 
 	if cfg.MaxFilesChanged > 0 && len(files) > cfg.MaxFilesChanged {
@@ -93,7 +109,11 @@ func enforceMissingVerifyGuardrail(planPath, headBefore, headAfter string, planC
 	if rootErr == nil && !filepath.IsAbs(planPath) {
 		planPath = filepath.Join(root, planPath)
 	}
-	files := listChangedFiles(headBefore, headAfter)
+	files, gitErr := listChangedFiles(headBefore, headAfter)
+	if gitErr {
+		// Fail-closed: if we can't determine changed files, reject to be safe
+		return false, "git_error_file_list"
+	}
 	for _, file := range files {
 		path := filepath.Clean(file)
 		if rootErr == nil && !filepath.IsAbs(path) {
@@ -116,13 +136,21 @@ func enforceMissingVerifyNoGit(planChanged bool, fingerprintBefore, fingerprintA
 	return true, ""
 }
 
-func listChangedFiles(headBefore, headAfter string) []string {
-	files := []string{}
+// listChangedFiles returns a list of changed files and whether there was a git error.
+// When gitErr is true, callers should fail-closed to avoid bypassing guardrails.
+func listChangedFiles(headBefore, headAfter string) (files []string, gitErr bool) {
+	files = []string{}
 	if headAfter != headBefore {
-		if names, err := gitOutput("diff", "--name-only", headBefore+".."+headAfter); err == nil {
-			files = append(files, splitLines(names)...)
+		names, err := gitOutput("diff", "--name-only", headBefore+".."+headAfter)
+		if err != nil {
+			return nil, true
 		}
-	} else if status, err := gitOutputRaw("status", "--porcelain"); err == nil {
+		files = append(files, splitLines(names)...)
+	} else {
+		status, err := gitOutputRaw("status", "--porcelain")
+		if err != nil {
+			return nil, true
+		}
 		for _, line := range splitStatusLines(status) {
 			// Git porcelain v1 format: "XY PATH" where XY are 2 status chars followed by space
 			// Minimum valid: 2 status + 1 space + 1 char path = 4 chars
@@ -136,7 +164,7 @@ func listChangedFiles(headBefore, headAfter string) []string {
 			files = append(files, path)
 		}
 	}
-	return files
+	return files, false
 }
 
 func parseStatusPath(value string) string {
@@ -161,13 +189,22 @@ func findUnquotedArrow(s string) int {
 	inQuote := false
 	for i := 0; i < len(s); i++ {
 		if s[i] == '"' {
-			// Toggle quote state, handling escaped quotes
+			// Toggle quote state, handling escaped quotes.
+			// A quote is escaped if preceded by an odd number of backslashes.
 			if !inQuote {
 				inQuote = true
-			} else if i > 0 && s[i-1] == '\\' {
-				// Escaped quote, stay in quote
 			} else {
-				inQuote = false
+				// Count preceding backslashes
+				numBackslashes := 0
+				for j := i - 1; j >= 0 && s[j] == '\\'; j-- {
+					numBackslashes++
+				}
+				// Odd number of backslashes means the quote is escaped
+				if numBackslashes%2 == 1 {
+					// Escaped quote, stay in quote
+				} else {
+					inQuote = false
+				}
 			}
 			continue
 		}

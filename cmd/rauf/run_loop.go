@@ -391,12 +391,9 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 		if verifyStatus != "skipped" && (verifyStatus != prevVerifyStatus || currentVerifyHash != prevVerifyHash) {
 			progress = true
 		}
-		// Unacknowledged backpressure counts against progress only if no actual work was done.
+		// Unacknowledged backpressure is noted but doesn't affect progress calculation.
 		// If commits or plan changes occurred, that's real progress even if backpressure wasn't acknowledged.
-		if !backpressureAcknowledged && !progress {
-			// No work done AND backpressure not acknowledged - this is truly no progress
-			progress = false
-		}
+		_ = backpressureAcknowledged // Acknowledged status already logged as warning above
 		exitReason := ""
 		if completionSignal != "" && completionOk && (cfg.mode != "build" || (!missingVerify && verifyStatus != "fail")) {
 			exitReason = "completion_contract_satisfied"
@@ -459,7 +456,9 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 			}
 			// Retry info already set from harnessRes earlier
 		}
-		_ = saveState(state)
+		if err := saveState(state); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to save state: %v\n", err)
+		}
 
 		if stalled && progress == false {
 			fmt.Println("No changes detected in iteration.")
@@ -582,6 +581,7 @@ func normalizeVerifyMissingPolicy(cfg runtimeConfig) string {
 	switch policy {
 	case "strict", "agent_enforced", "fallback":
 		if policy == "fallback" && !cfg.AllowVerifyFallback {
+			fmt.Fprintln(os.Stderr, "Warning: verify_missing_policy is 'fallback' but allow_verify_fallback is false; using 'strict' instead")
 			return "strict"
 		}
 		return policy

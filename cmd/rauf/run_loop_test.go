@@ -131,3 +131,58 @@ func TestRunStrategyNoProgressStops(t *testing.T) {
 		t.Fatalf("expected 2 harness runs, got %d", count)
 	}
 }
+
+func TestShouldContinueUntil(t *testing.T) {
+	tests := []struct {
+		name     string
+		step     strategyStep
+		result   iterationResult
+		expected bool
+	}{
+		{
+			name:     "empty until continues",
+			step:     strategyStep{Mode: "build", Iterations: 5, Until: ""},
+			result:   iterationResult{VerifyStatus: "skipped"},
+			expected: true,
+		},
+		{
+			name:     "verify_pass continues when not passed",
+			step:     strategyStep{Mode: "build", Iterations: 5, Until: "verify_pass"},
+			result:   iterationResult{VerifyStatus: "fail"},
+			expected: true,
+		},
+		{
+			name:     "verify_pass stops when passed",
+			step:     strategyStep{Mode: "build", Iterations: 5, Until: "verify_pass"},
+			result:   iterationResult{VerifyStatus: "pass"},
+			expected: false,
+		},
+		{
+			name:     "verify_fail continues when not failed",
+			step:     strategyStep{Mode: "build", Iterations: 5, Until: "verify_fail"},
+			result:   iterationResult{VerifyStatus: "pass"},
+			expected: true,
+		},
+		{
+			name:     "verify_fail stops when failed",
+			step:     strategyStep{Mode: "build", Iterations: 5, Until: "verify_fail"},
+			result:   iterationResult{VerifyStatus: "fail"},
+			expected: false,
+		},
+		{
+			name:     "unknown until condition continues",
+			step:     strategyStep{Mode: "build", Iterations: 5, Until: "unknown_condition"},
+			result:   iterationResult{VerifyStatus: "pass"},
+			expected: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldContinueUntil(tc.step, tc.result)
+			if got != tc.expected {
+				t.Errorf("shouldContinueUntil() = %v, want %v", got, tc.expected)
+			}
+		})
+	}
+}

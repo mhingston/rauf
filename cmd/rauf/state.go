@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,10 +31,14 @@ func loadState() raufState {
 	path := statePath()
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "Warning: failed to read state file %s: %v\n", path, err)
+		}
 		return raufState{}
 	}
 	var state raufState
 	if err := json.Unmarshal(data, &state); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to parse state file %s: %v (using empty state)\n", path, err)
 		return raufState{}
 	}
 	return state
@@ -83,7 +88,11 @@ func saveState(state raufState) error {
 	}
 	success = true
 
-	return writeStateSummary(state)
+	// Write summary file - errors here are non-fatal since primary state was saved
+	if err := writeStateSummary(state); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to write state summary: %v\n", err)
+	}
+	return nil
 }
 
 func statePath() string {
@@ -121,7 +130,34 @@ func writeStateSummary(state raufState) error {
 		b.WriteString("\n```\n")
 	}
 
-	return os.WriteFile(stateSummaryPath(), []byte(b.String()), 0o644)
+	// Use atomic write pattern for consistency
+	path := stateSummaryPath()
+	dir := filepath.Dir(path)
+	tempFile, err := os.CreateTemp(dir, ".state-summary-*.md.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := tempFile.Name()
+
+	writeSuccess := false
+	defer func() {
+		if !writeSuccess {
+			tempFile.Close()
+			os.Remove(tempPath)
+		}
+	}()
+
+	if _, err := tempFile.WriteString(b.String()); err != nil {
+		return err
+	}
+	if err := tempFile.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	writeSuccess = true
+	return nil
 }
 
 func truncateStateSummary(value string) string {

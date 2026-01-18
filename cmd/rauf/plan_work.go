@@ -118,7 +118,15 @@ func resolvePlanPath(branch string, gitAvailable bool, fallback string) string {
 		return fallback
 	}
 	path, err := gitOutput("config", "--get", fmt.Sprintf("branch.%s.raufPlanPath", branch))
-	if err == nil && path != "" {
+	if err != nil {
+		// git config --get exits with code 1 when key doesn't exist (expected)
+		// For other errors (corrupted config, permission issues), warn user
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() != 1 {
+			fmt.Fprintf(os.Stderr, "Warning: failed to read branch config for %s: %v\n", branch, err)
+		}
+		return fallback
+	}
+	if path != "" {
 		return path
 	}
 	return fallback

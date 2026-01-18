@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+	"time"
 	"unicode/utf8"
 )
 
@@ -46,6 +48,13 @@ func buildPromptContent(promptFile string, data promptData) (string, string, err
 		return "", "", err
 	}
 
+	// Escape template delimiters in user-controlled fields to prevent injection
+	data.ActiveTask = escapeTemplateDelimiters(data.ActiveTask)
+	data.VerifyCommand = escapeTemplateDelimiters(data.VerifyCommand)
+	data.PlanSummary = escapeTemplateDelimiters(data.PlanSummary)
+	data.PriorVerification = escapeTemplateDelimiters(data.PriorVerification)
+	data.PriorVerificationCmd = escapeTemplateDelimiters(data.PriorVerificationCmd)
+
 	tmpl, err := template.New(filepath.Base(promptFile)).Option("missingkey=zero").Parse(string(content))
 	if err != nil {
 		return "", "", err
@@ -58,6 +67,15 @@ func buildPromptContent(promptFile string, data promptData) (string, string, err
 	rendered := buf.String()
 	hash := sha256.Sum256([]byte(rendered))
 	return rendered, fmt.Sprintf("%x", hash), nil
+}
+
+// escapeTemplateDelimiters escapes Go template delimiters to prevent template injection
+// from user-controlled content like task names or verification output.
+func escapeTemplateDelimiters(s string) string {
+	// Replace {{ with a literal representation that won't be interpreted as template
+	s = strings.ReplaceAll(s, "{{", "{ {")
+	s = strings.ReplaceAll(s, "}}", "} }")
+	return s
 }
 
 func buildContextPack(planPath string, task planTask, verifyCmds []string, state raufState, gitAvailable bool, verifyInstruction string) string {
@@ -130,12 +148,17 @@ func readSpecContexts(paths []string, maxBytes int) string {
 	seen := make(map[string]struct{})
 	var b strings.Builder
 	budget := maxBytes
+	// Cache the root directory for consistent path resolution
+	root, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
 	for _, path := range paths {
 		path = filepath.Clean(path)
 		if _, ok := seen[path]; ok {
 			continue
 		}
-		absPath, ok := resolveRepoPath(path)
+		absPath, ok := resolveRepoPathWithRoot(path, root)
 		if !ok {
 			continue
 		}
@@ -150,7 +173,7 @@ func readSpecContexts(paths []string, maxBytes int) string {
 			continue
 		}
 		b.WriteString("#### ")
-		b.WriteString(repoRelativePath(absPath))
+		b.WriteString(repoRelativePathWithRoot(absPath, root))
 		b.WriteString("\n\n```")
 		b.WriteString(chunk)
 		b.WriteString("\n```\n\n")
@@ -170,12 +193,17 @@ func readRelevantFiles(task planTask, gitAvailable bool, maxBytes int) string {
 	seen := make(map[string]struct{})
 	var b strings.Builder
 	budget := maxBytes
+	// Cache the root directory for consistent path resolution
+	root, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
 	for _, path := range paths {
 		path = filepath.Clean(path)
 		if _, ok := seen[path]; ok {
 			continue
 		}
-		absPath, ok := resolveRepoPath(path)
+		absPath, ok := resolveRepoPathWithRoot(path, root)
 		if !ok {
 			continue
 		}
@@ -189,7 +217,7 @@ func readRelevantFiles(task planTask, gitAvailable bool, maxBytes int) string {
 			continue
 		}
 		b.WriteString("#### ")
-		b.WriteString(repoRelativePath(absPath))
+		b.WriteString(repoRelativePathWithRoot(absPath, root))
 		b.WriteString("\n\n```")
 		b.WriteString(chunk)
 		b.WriteString("\n```\n\n")
@@ -251,9 +279,12 @@ func searchRelevantFiles(task planTask) []string {
 		if len(results) >= 8 {
 			break
 		}
+		// Use a timeout to prevent hanging on large repos or pathological inputs
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		args := []string{"-l", "-F", "-i", "--max-count", "1", term}
-		cmd := exec.Command("rg", args...)
+		cmd := exec.CommandContext(ctx, "rg", args...)
 		output, err := cmd.Output()
+		cancel()
 		if err != nil {
 			continue
 		}
@@ -374,17 +405,20 @@ func buildSpecIndex() string {
 }
 
 func readRecentFiles() []string {
-	status, err := gitOutput("status", "--porcelain")
+	status, err := gitOutputRaw("status", "--porcelain")
 	if err != nil || status == "" {
 		return nil
 	}
 	lines := strings.Split(status, "\n")
 	paths := []string{}
 	for _, line := range lines {
+		// Git porcelain v1 format: "XY PATH" where XY are 2 status chars followed by space
+		// Minimum valid: 2 status + 1 space + 1 char path = 4 chars
+		line = strings.TrimRight(line, "\r")
 		if len(line) < 4 {
 			continue
 		}
-		path := strings.TrimSpace(line[3:])
+		path := parseStatusPath(line[3:])
 		if path == "" {
 			continue
 		}
@@ -417,9 +451,16 @@ func normalizeVerifyOutput(output string) string {
 }
 
 func resolveRepoPath(path string) (string, bool) {
-	root, err := os.Getwd()
-	if err != nil {
-		return "", false
+	return resolveRepoPathWithRoot(path, "")
+}
+
+func resolveRepoPathWithRoot(path string, root string) (string, bool) {
+	if root == "" {
+		var err error
+		root, err = os.Getwd()
+		if err != nil {
+			return "", false
+		}
 	}
 	clean := filepath.Clean(path)
 	if filepath.IsAbs(clean) {
@@ -436,9 +477,16 @@ func resolveRepoPath(path string) (string, bool) {
 }
 
 func repoRelativePath(absPath string) string {
-	root, err := os.Getwd()
-	if err != nil {
-		return absPath
+	return repoRelativePathWithRoot(absPath, "")
+}
+
+func repoRelativePathWithRoot(absPath string, root string) string {
+	if root == "" {
+		var err error
+		root, err = os.Getwd()
+		if err != nil {
+			return absPath
+		}
 	}
 	rel, err := filepath.Rel(root, absPath)
 	if err != nil {
@@ -448,7 +496,22 @@ func repoRelativePath(absPath string) string {
 }
 
 func isWithinRoot(root, target string) bool {
-	rel, err := filepath.Rel(root, target)
+	// Resolve symlinks in root to get canonical path
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		// If root can't be resolved, use the original
+		resolvedRoot = root
+	}
+
+	// Resolve symlinks in target to detect path traversal via symlinks
+	resolvedTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		// If target doesn't exist or can't be resolved, check the unresolved path
+		// This is safe because the file read will fail anyway if it doesn't exist
+		resolvedTarget = target
+	}
+
+	rel, err := filepath.Rel(resolvedRoot, resolvedTarget)
 	if err != nil {
 		return false
 	}

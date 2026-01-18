@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -338,7 +337,6 @@ func parseArgs(args []string) (modeConfig, error) {
 	if len(args) == 0 {
 		return cfg, nil
 	}
-	cfg.explicitMode = true
 
 	switch args[0] {
 	case "--help", "-h", "help":
@@ -379,6 +377,7 @@ func parseArgs(args []string) (modeConfig, error) {
 		cfg.mode = "architect"
 		cfg.promptFile = "PROMPT_architect.md"
 		cfg.maxIterations = defaultArchitectIterations
+		cfg.explicitMode = true // Explicit mode name disables strategy
 		if len(args) > 1 {
 			max, err := parsePositiveInt(args[1])
 			if err != nil {
@@ -390,6 +389,7 @@ func parseArgs(args []string) (modeConfig, error) {
 		cfg.mode = "plan"
 		cfg.promptFile = "PROMPT_plan.md"
 		cfg.maxIterations = defaultPlanIterations
+		cfg.explicitMode = true // Explicit mode name disables strategy
 		if len(args) > 1 {
 			max, err := parsePositiveInt(args[1])
 			if err != nil {
@@ -405,6 +405,8 @@ func parseArgs(args []string) (modeConfig, error) {
 		cfg.mode = "build"
 		cfg.promptFile = "PROMPT_build.md"
 		cfg.maxIterations = max
+		// Note: explicitMode stays false for numeric-only args like "rauf 5"
+		// so strategy mode can still apply if configured
 	}
 
 	return cfg, nil
@@ -478,7 +480,7 @@ func loadConfig(path string) (runtimeConfig, bool, error) {
 func parseConfigBytes(data []byte, cfg *runtimeConfig) error {
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	section := ""
-	var strategyCurrent *strategyStep
+	strategyCurrentIdx := -1 // Index into cfg.Strategy, -1 means none
 	var inForbiddenPaths bool
 	var skipMultilineKey string // Track if we're skipping multi-line content
 	var multilineIndent int     // Track the base indent of the multi-line key
@@ -507,7 +509,7 @@ func parseConfigBytes(data []byte, cfg *runtimeConfig) error {
 		if ok {
 			// Check for multi-line YAML syntax which is not supported
 			if value == "|" || value == ">" || value == "|-" || value == ">-" || value == "|+" || value == ">+" {
-				fmt.Fprintf(os.Stderr, "Warning: rauf.yaml key %q uses multi-line YAML syntax which is not supported; value will be empty\n", key)
+				fmt.Fprintf(os.Stderr, "Warning: rauf.yaml key %q uses multi-line YAML syntax which is not supported; use a single-line value or quoted string instead\n", key)
 				skipMultilineKey = key
 				multilineIndent = indent
 				continue
@@ -517,7 +519,7 @@ func parseConfigBytes(data []byte, cfg *runtimeConfig) error {
 
 		if indent == 0 {
 			section = ""
-			strategyCurrent = nil
+			strategyCurrentIdx = -1
 			inForbiddenPaths = false
 			if ok && value == "" {
 				section = key
@@ -629,11 +631,11 @@ func parseConfigBytes(data []byte, cfg *runtimeConfig) error {
 					}
 				}
 				cfg.Strategy = append(cfg.Strategy, step)
-				strategyCurrent = &cfg.Strategy[len(cfg.Strategy)-1]
+				strategyCurrentIdx = len(cfg.Strategy) - 1
 				continue
 			}
-			if strategyCurrent != nil && ok {
-				assignStrategyField(strategyCurrent, key, value)
+			if strategyCurrentIdx >= 0 && ok {
+				assignStrategyField(&cfg.Strategy[strategyCurrentIdx], key, value)
 			}
 		}
 	}
@@ -680,9 +682,19 @@ func stripQuotesAndComments(value string) string {
 			return value[1 : len(value)-1]
 		}
 		// Check for quote at start with comment after closing quote
+		// Handle escaped quotes within the string
 		if value[0] == '"' || value[0] == '\'' {
 			quote := value[0]
+			escaped := false
 			for i := 1; i < len(value); i++ {
+				if escaped {
+					escaped = false
+					continue
+				}
+				if value[i] == '\\' {
+					escaped = true
+					continue
+				}
 				if value[i] == quote {
 					return value[1:i]
 				}
@@ -826,12 +838,14 @@ func gitPush(branch string) error {
 		return nil
 	}
 
+	// First push failed, try with -u flag to set upstream
+	fmt.Println("Initial push failed, retrying with upstream tracking...")
 	fallback := exec.Command("git", "push", "-u", "origin", branch)
 	fallback.Stdout = os.Stdout
 	fallback.Stderr = os.Stderr
 	fallback.Env = os.Environ()
 	if err := fallback.Run(); err != nil {
-		return errors.New("git push failed after fallback")
+		return fmt.Errorf("git push failed: %w", err)
 	}
 	return nil
 }
@@ -989,7 +1003,11 @@ func envFirst(keys ...string) string {
 func envBool(keys ...string) (bool, bool) {
 	for _, key := range keys {
 		if value, ok := os.LookupEnv(key); ok {
-			return parseBool(value)
+			result, valid := parseBool(value)
+			if !valid {
+				fmt.Fprintf(os.Stderr, "Warning: invalid boolean value %q for %s, ignoring\n", value, key)
+			}
+			return result, valid
 		}
 	}
 	return false, false
@@ -1124,7 +1142,12 @@ func backoffDuration(base, max time.Duration, attempt int, jitter bool) time.Dur
 	if attempt < 1 {
 		attempt = 1
 	}
-	delay := base * time.Duration(1<<uint(attempt-1))
+	// Cap the shift to prevent integer overflow (max 62 for int64)
+	shift := attempt - 1
+	if shift > 62 {
+		shift = 62
+	}
+	delay := base * time.Duration(1<<uint(shift))
 	if max > 0 && delay > max {
 		delay = max
 	}
