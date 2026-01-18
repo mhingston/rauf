@@ -173,3 +173,51 @@ func chdirTemp(t *testing.T, dir string) {
 		_ = os.Chdir(cwd)
 	})
 }
+
+func TestUnquoteGitPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"unquoted path", "simple/path.txt", "simple/path.txt"},
+		{"quoted path with spaces", `"path with spaces/file.txt"`, "path with spaces/file.txt"},
+		{"quoted path with escape", `"path\\with\\backslash"`, `path\with\backslash`},
+		{"quoted path with quotes", `"say \"hello\""`, `say "hello"`},
+		{"quoted path with newline", `"line1\nline2"`, "line1\nline2"},
+		{"quoted path with tab", `"col1\tcol2"`, "col1\tcol2"},
+		{"quoted path with octal", `"\302\240"`, "\302\240"},
+		{"empty string", "", ""},
+		{"just quotes", `""`, ""},
+		{"single quote not handled", "'single'", "'single'"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := unquoteGitPath(tc.input)
+			if result != tc.expected {
+				t.Errorf("unquoteGitPath(%q) = %q, want %q", tc.input, result, tc.expected)
+			}
+		})
+	}
+}
+
+func TestParseStatusPathWithQuotes(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"simple path", "simple.txt", "simple.txt"},
+		{"quoted path", `"path with spaces.txt"`, "path with spaces.txt"},
+		{"rename with quoted dest", `old.txt -> "new file.txt"`, "new file.txt"},
+		{"rename both quoted", `"old file.txt" -> "new file.txt"`, "new file.txt"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := parseStatusPath(tc.input)
+			if result != tc.expected {
+				t.Errorf("parseStatusPath(%q) = %q, want %q", tc.input, result, tc.expected)
+			}
+		})
+	}
+}

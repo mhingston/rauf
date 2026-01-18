@@ -88,14 +88,15 @@ func parseCompletionContract(path string) (completionContract, error) {
 	scanner := bufio.NewScanner(file)
 	inSection := false
 	currentList := ""
-	inFence := false
-	fenceChar := byte(0)
-	fenceLen := 0
+	var fence fenceState // Use the shared fence state from fence.go
 	for scanner.Scan() {
 		line := scanner.Text()
 		trimmed := strings.TrimSpace(line)
 
-		if strings.HasPrefix(trimmed, "## ") {
+		// Process fence state first - this handles opening/closing fences consistently
+		inFence := fence.processLine(trimmed)
+
+		if strings.HasPrefix(trimmed, "## ") && !inFence {
 			title := strings.TrimSpace(strings.TrimPrefix(trimmed, "## "))
 			if inSection {
 				break
@@ -112,12 +113,17 @@ func parseCompletionContract(path string) (completionContract, error) {
 			continue
 		}
 
-		if strings.HasPrefix(trimmed, "## ") {
+		if strings.HasPrefix(trimmed, "## ") && !inFence {
 			break
 		}
 
 		if trimmed == "" {
 			currentList = ""
+			continue
+		}
+
+		// Skip content inside code fences
+		if inFence {
 			continue
 		}
 
@@ -131,36 +137,6 @@ func parseCompletionContract(path string) (completionContract, error) {
 			continue
 		case "success condition":
 			currentList = ""
-			continue
-		}
-
-		if len(trimmed) >= 3 {
-			if !inFence {
-				if trimmed[0] == '`' || trimmed[0] == '~' {
-					fenceChar = trimmed[0]
-					fenceLen = 1
-					for fenceLen < len(trimmed) && trimmed[fenceLen] == fenceChar {
-						fenceLen++
-					}
-					if fenceLen >= 3 {
-						inFence = true
-						continue
-					}
-				}
-			} else if fenceChar != 0 {
-				count := 0
-				for count < len(trimmed) && trimmed[count] == fenceChar {
-					count++
-				}
-				if count >= fenceLen {
-					inFence = false
-					fenceChar = 0
-					fenceLen = 0
-					continue
-				}
-			}
-		}
-		if inFence {
 			continue
 		}
 
@@ -230,17 +206,15 @@ func checkCompletionArtifacts(specRefs []string) (bool, string, []string, []stri
 			satisfied = append(satisfied, specLabel)
 			continue
 		}
-		found := false
 		missing := []string{}
 		for _, abs := range candidates {
 			if _, err := os.Stat(abs); err == nil {
-				found = true
 				verified = append(verified, repoRelativePath(abs))
 				continue
 			}
 			missing = append(missing, repoRelativePath(abs))
 		}
-		if found {
+		if len(missing) == 0 {
 			satisfied = append(satisfied, specLabel)
 		} else {
 			failures = append(failures, fmt.Sprintf("%s missing artifacts: %s", spec, strings.Join(missing, ", ")))

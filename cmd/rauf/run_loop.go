@@ -22,7 +22,7 @@ type iterationResult struct {
 
 const completionSentinel = "RAUF_COMPLETE"
 
-func runStrategy(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state raufState, gitAvailable bool, branch, planPath, defaultModel string, yoloEnabled bool, harness, harnessArgs string, noPush bool, logDir string, retryEnabled bool, retryMaxAttempts int, retryBackoffBase, retryBackoffMax time.Duration, retryJitter bool, retryMatch []string) {
+func runStrategy(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state raufState, gitAvailable bool, branch, planPath string, harness, harnessArgs string, noPush bool, logDir string, retryEnabled bool, retryMaxAttempts int, retryBackoffBase, retryBackoffMax time.Duration, retryJitter bool, retryMatch []string) {
 	lastResult := iterationResult{}
 	for _, step := range fileCfg.Strategy {
 		if !shouldRunStep(step, lastResult) {
@@ -36,13 +36,12 @@ func runStrategy(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, stat
 			maxIterations = 1
 		}
 		modeCfg.maxIterations = 1
-		model := defaultModel
-		if step.Model != "" {
-			model = step.Model
-		}
+		// Reset NoProgress counter at the start of each strategy step
+		stepNoProgress := 0
 		for i := 0; i < maxIterations; i++ {
-			result := runMode(modeCfg, fileCfg, runner, state, gitAvailable, branch, planPath, model, yoloEnabled, harness, harnessArgs, noPush, logDir, retryEnabled, retryMaxAttempts, retryBackoffBase, retryBackoffMax, retryJitter, retryMatch, lastResult.NoProgress)
+			result := runMode(modeCfg, fileCfg, runner, state, gitAvailable, branch, planPath, harness, harnessArgs, noPush, logDir, retryEnabled, retryMaxAttempts, retryBackoffBase, retryBackoffMax, retryJitter, retryMatch, stepNoProgress)
 			lastResult = result
+			stepNoProgress = result.NoProgress
 			if result.ExitReason == "no_progress" {
 				break
 			}
@@ -53,7 +52,7 @@ func runStrategy(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, stat
 	}
 }
 
-func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state raufState, gitAvailable bool, branch, planPath, model string, yoloEnabled bool, harness, harnessArgs string, noPush bool, logDir string, retryEnabled bool, retryMaxAttempts int, retryBackoffBase, retryBackoffMax time.Duration, retryJitter bool, retryMatch []string, startNoProgress int) iterationResult {
+func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state raufState, gitAvailable bool, branch, planPath string, harness, harnessArgs string, noPush bool, logDir string, retryEnabled bool, retryMaxAttempts int, retryBackoffBase, retryBackoffMax time.Duration, retryJitter bool, retryMatch []string, startNoProgress int) iterationResult {
 	iteration := 0
 	noProgress := startNoProgress
 	maxNoProgress := fileCfg.NoProgressIters
@@ -82,12 +81,9 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 			}
 		}
 
-		if cfg.mode == "build" {
-			if hasPlanFile(planPath) && !hasUncheckedTasks(planPath) && state.LastVerificationStatus != "fail" {
-				fmt.Println("No unchecked tasks found. Exiting.")
-				break
-			}
-		}
+		// Note: We don't check for unchecked tasks here at the start of iteration
+		// because state.LastVerificationStatus may be stale. The check is done
+		// after verification runs, using the current iteration's verifyStatus.
 
 		headBefore := ""
 		if gitAvailable {
@@ -230,7 +226,6 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 		writeLogEntry(logFile, logEntry{
 			Type:       "iteration_start",
 			Mode:       cfg.mode,
-			Model:      model,
 			Iteration:  iterNum,
 			VerifyCmd:  formatVerifyCommands(verifyCmds),
 			PlanHash:   planHashBefore,
@@ -248,9 +243,9 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 			Match:       retryMatch,
 		}
 
-		harnessRes, err := runHarness(ctx, promptContent, harness, harnessArgs, model, yoloEnabled, logFile, retryCfg, runner)
+		harnessRes, err := runHarness(ctx, promptContent, harness, harnessArgs, logFile, retryCfg, runner)
 		if err != nil {
-			stop()
+			stop() // Clean up signal handler
 			if closeErr := logFile.Close(); closeErr != nil {
 				fmt.Fprintln(os.Stderr, closeErr)
 			}
@@ -291,8 +286,9 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 
 		prevVerifyStatus := state.LastVerificationStatus
 		prevVerifyHash := state.LastVerificationHash
+		currentVerifyHash := "" // Will be set after verification runs
 		if cfg.mode == "architect" {
-			if updated, ok := runArchitectQuestions(ctx, runner, &promptContent, output, state, harness, harnessArgs, model, yoloEnabled, logFile, retryCfg); ok {
+			if updated, ok := runArchitectQuestions(ctx, runner, &promptContent, output, state, harness, harnessArgs, logFile, retryCfg); ok {
 				output = updated
 			}
 		}
@@ -307,6 +303,7 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 				verifyStatus = "pass"
 			}
 			verifyOutput = normalizeVerifyOutput(verifyOutput)
+			currentVerifyHash = fileHashFromString(verifyOutput)
 			if verifyStatus == "fail" {
 				state.LastVerificationOutput = verifyOutput
 				state.LastVerificationCommand = formatVerifyCommands(verifyCmds)
@@ -320,9 +317,10 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 				state.LastVerificationHash = ""
 				state.ConsecutiveVerifyFails = 0
 			}
-			_ = saveState(state)
+			if err := saveState(state); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to save state: %v\n", err)
+			}
 		}
-		stop()
 
 		headAfter := headBefore
 		if gitAvailable {
@@ -390,11 +388,13 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 		}
 
 		progress := headAfter != headBefore || planHashAfter != planHashBefore
-		if verifyStatus != "skipped" && (verifyStatus != prevVerifyStatus || state.LastVerificationHash != prevVerifyHash) {
+		if verifyStatus != "skipped" && (verifyStatus != prevVerifyStatus || currentVerifyHash != prevVerifyHash) {
 			progress = true
 		}
-		// Unacknowledged backpressure counts against progress
-		if !backpressureAcknowledged {
+		// Unacknowledged backpressure counts against progress only if no actual work was done.
+		// If commits or plan changes occurred, that's real progress even if backpressure wasn't acknowledged.
+		if !backpressureAcknowledged && !progress {
+			// No work done AND backpressure not acknowledged - this is truly no progress
 			progress = false
 		}
 		exitReason := ""
@@ -488,6 +488,9 @@ func runMode(cfg modeConfig, fileCfg runtimeConfig, runner runtimeExec, state ra
 			fmt.Fprintln(os.Stderr, closeErr)
 		}
 
+		// Clean up signal handler for this iteration
+		stop()
+
 		lastResult = iterationResult{
 			VerifyStatus: verifyStatus,
 			VerifyOutput: verifyOutput,
@@ -529,50 +532,20 @@ func promptForMode(mode string) string {
 }
 
 func hasCompletionSentinel(output string) bool {
-	inFence := false
-	fenceChar := byte(0)
-	fenceLen := 0
-	for _, line := range strings.Split(output, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if len(trimmed) >= 3 {
-			if !inFence {
-				if trimmed[0] == '`' || trimmed[0] == '~' {
-					fenceChar = trimmed[0]
-					fenceLen = 1
-					for fenceLen < len(trimmed) && trimmed[fenceLen] == fenceChar {
-						fenceLen++
-					}
-					if fenceLen >= 3 {
-						inFence = true
-						continue
-					}
-				}
-			} else if fenceChar != 0 {
-				count := 0
-				for count < len(trimmed) && trimmed[count] == fenceChar {
-					count++
-				}
-				if count >= fenceLen {
-					inFence = false
-					fenceChar = 0
-					fenceLen = 0
-					continue
-				}
-			}
-		}
-		if inFence {
-			continue
-		}
-		if trimmed == completionSentinel {
-			return true
-		}
-	}
-	return false
+	return scanLinesOutsideFence(output, func(trimmed string) bool {
+		return trimmed == completionSentinel
+	})
 }
 
 func runVerification(ctx context.Context, runner runtimeExec, cmds []string, logFile *os.File) (string, error) {
 	var combined strings.Builder
 	for _, cmd := range cmds {
+		// Check for context cancellation before running each command
+		select {
+		case <-ctx.Done():
+			return combined.String(), ctx.Err()
+		default:
+		}
 		cmd = strings.TrimSpace(cmd)
 		if cmd == "" {
 			continue
@@ -585,6 +558,11 @@ func runVerification(ctx context.Context, runner runtimeExec, cmds []string, log
 			combined.WriteString("\n")
 			combined.WriteString(output)
 			combined.WriteString("\n")
+		}
+		// Check for context cancellation after command completes
+		// This catches cases where the command finished but we were signaled during execution
+		if ctx.Err() != nil {
+			return combined.String(), ctx.Err()
 		}
 		if err != nil {
 			return combined.String(), err
@@ -664,12 +642,22 @@ func applyVerifyFailPolicy(cfg runtimeConfig, headBefore, headAfter string) stri
 	case "wip_branch":
 		branchName := fmt.Sprintf("wip/verify-fail-%s", time.Now().Format("20060102-150405"))
 		name := branchName
+		found := false
 		for i := 0; i < 10; i++ {
-			exists, err := gitBranchExists(name)
+			candidate := name
+			if i > 0 {
+				candidate = fmt.Sprintf("%s-%d", branchName, i)
+			}
+			exists, err := gitBranchExists(candidate)
 			if err == nil && !exists {
+				name = candidate
+				found = true
 				break
 			}
-			name = fmt.Sprintf("%s-%d", branchName, i+1)
+		}
+		if !found {
+			fmt.Fprintln(os.Stderr, "Verify-fail branch creation failed: could not find unique branch name after 10 attempts")
+			return headAfter
 		}
 		if err := gitQuiet("branch", name, headAfter); err != nil {
 			fmt.Fprintln(os.Stderr, "Verify-fail branch creation failed:", err)

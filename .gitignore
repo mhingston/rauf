@@ -8,3 +8,7 @@ bin/
 *.out
 coverage*.out
 .DS_Store
+
+# Built binaries
+/rauf
+/cmd/rauf/rauf

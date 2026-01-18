@@ -44,7 +44,7 @@ flowchart LR
 ```
 
 1. **Architect**: define WHAT must be built (`specs/`)
-2. **Plan**: derive tasks from approved specs (`IMPLEMENTATION_PLAN.md` or branch-scoped plan)
+2. **Plan**: derive tasks from approved specs (`IMPLEMENTATION_PLAN.md`)
 3. **Build**: implement one verified task per iteration
 
 Each phase is isolated and enforced.
@@ -52,11 +52,8 @@ Each phase is isolated and enforced.
 ## Quick start
 
 ```bash
-rauf init                    # Create rauf.yaml and AGENTS.md templates
-# edit AGENTS.md to add repo commands
-
-rauf plan-work "add oauth"   # Create branch-scoped plan for a feature
-# or keep using repo-root IMPLEMENTATION_PLAN.md
+rauf init                    # Create rauf.yaml, AGENTS.md, and templates
+# edit AGENTS.md to add your repo's commands
 
 rauf architect               # Define WHAT (writes to specs/)
 # review spec, set status: approved
@@ -65,20 +62,198 @@ rauf plan                    # Derive tasks from approved specs
 rauf 5                       # Run 5 build iterations
 ```
 
-## Beyond the Traditional Ralph Loop
+## Modes
 
-`rauf` is a formal, Go-based implementation of the "[Ralph](https://github.com/ghuntley/how-to-ralph-wiggum)" loop philosophy. While a traditional loop might be a simple bash script feeding a CLI, `rauf` provides an orchestration layer designed for production-grade software engineering:
+rauf operates in distinct modes, each with its own prompt file and behavior:
 
-- **Native Orchestration:** Move beyond simple `while true` loops with first-class `Architect -> Plan -> Build` strategies.
-- **Enhanced Backpressure:** Persistent state tracking (via `state.json`) ensures that verification failures and loop errors are fed back into the next iteration's context for self-correction.
-- **Automatic Context Management:** Native support for Repo Mapping and Spec Indexing ensures the agent always knows exactly where it is and what its source of truth is.
-- **Strict Isolation:** Built-in support for Docker runtimes ensures agent commands are sandboxed, protecting your host machine while enabling autonomous execution.
-- **Auditability:** Automatic commit-per-task logic creates a clean, verifiable git history of the agent's reasoning and implementation steps.
-- **Completion Contracts:** Specs require explicit completion criteria with concrete verification commands, preventing ambiguous "done" states.
+| Mode | Command | Prompt File | Purpose |
+|------|---------|-------------|---------|
+| `architect` | `rauf architect [N]` | `PROMPT_architect.md` | Define specifications in `specs/` |
+| `plan` | `rauf plan [N]` | `PROMPT_plan.md` | Derive tasks from approved specs |
+| `build` | `rauf [N]` | `PROMPT_build.md` | Implement one task per iteration |
+
+The optional `[N]` argument limits iterations (e.g., `rauf plan 3` runs up to 3 plan iterations).
+
+### Mode behaviors
+
+| Behavior | Architect | Plan | Build |
+|----------|-----------|------|-------|
+| Generates repo map | Yes | Yes | No |
+| Generates spec index | No | Yes | No |
+| Runs verification | No | No | Yes |
+| Enforces guardrails | No | No | Yes |
+| Injects backpressure | No | Yes | Yes |
+
+### Additional commands
+
+| Command | Purpose |
+|---------|---------|
+| `rauf init [--force] [--dry-run]` | Create config and template files |
+| `rauf plan-work "<name>"` | Create branch-scoped plan in `.rauf/IMPLEMENTATION_PLAN.md` |
+| `rauf import --stage <stage> --slug <slug>` | Import SpecFirst artifact into `specs/` |
+| `rauf help` | Show usage |
+| `rauf version` | Show version |
+
+## Strategy mode
+
+When `strategy:` is defined in config and no explicit mode is given, rauf runs a sequence of steps:
+
+```yaml
+strategy:
+  - mode: plan
+    iterations: 1
+  - mode: build
+    iterations: 5
+    until: verify_pass
+```
+
+### Strategy options
+
+| Option | Description | Values |
+|--------|-------------|--------|
+| `mode` | Which mode to run | `architect`, `plan`, `build` |
+| `iterations` | Max iterations for this step | Any positive integer |
+| `until` | Continue iterating until condition met | `verify_pass`, `verify_fail` |
+| `if` | Only run step if condition is true | `stalled`, `verify_pass`, `verify_fail` |
+
+Example with conditional step:
+
+```yaml
+strategy:
+  - mode: plan
+    iterations: 1
+  - mode: build
+    iterations: 10
+    until: verify_pass
+  - mode: plan
+    iterations: 1
+    if: stalled  # Re-plan if build made no progress
+```
+
+## File formats
+
+### Spec file (`specs/*.md`)
+
+```markdown
+---
+id: user-auth
+status: draft # draft | approved
+version: 0.1.0
+owner: optional
+---
+
+# User Authentication
+
+## 1. Context & User Story
+As a user, I want to log in with email/password, so that I can access my account.
+
+## 2. Non-Goals
+- Social login (out of scope for v1)
+
+## 3. Contract (SpecFirst)
+Contract format: TypeScript
+
+interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+## 4. Completion Contract
+Success condition:
+- User can log in and receive a valid session token
+
+Verification commands:
+- npm test -- --grep "auth"
+- curl -X POST /api/login -d '{"email":"test@example.com","password":"test"}' | jq .token
+
+Artifacts/flags:
+- src/auth/login.ts exists
+- Tests pass
+
+## 5. Scenarios (Acceptance Criteria)
+### Scenario: Valid login
+Given a registered user
+When they submit valid credentials
+Then they receive a session token
+
+Verification:
+- npm test -- --grep "valid login"
+```
+
+Specs require `status: approved` before tasks can be planned from them.
+
+### Plan file (`IMPLEMENTATION_PLAN.md`)
+
+```markdown
+# Implementation Plan
+
+## Feature: User Auth (from specs/user-auth.md)
+- [ ] T1: Create login endpoint
+  - Spec: specs/user-auth.md#3-contract
+  - Verify: npm test -- --grep "login endpoint"
+  - Outcome: POST /api/login returns 200 with valid credentials
+  - Notes: Use bcrypt for password comparison
+
+- [x] T2: Add session token generation
+  - Spec: specs/user-auth.md#4-completion-contract
+  - Verify: npm test -- --grep "session token"
+  - Outcome: Login response includes JWT token
+```
+
+Task lines must use `- [ ]` or `- [x]` for rauf to detect status.
+
+### AGENTS.md
+
+```markdown
+# AGENTS
+
+## Repo Layout
+- specs/: specifications
+- src/: application code
+- IMPLEMENTATION_PLAN.md: task list
+
+## Commands
+- Tests (fast): npm test
+- Tests (full): npm run test:all
+- Lint: npm run lint
+- Typecheck/build: npm run build
+
+## Git
+- Status: git status
+- Diff: git diff
+- Log: git log -5 --oneline
+
+## Definition of Done
+- Verify command passes
+- Plan task checked
+- Commit created
+```
+
+## Harnesses
+
+A harness is any executable that reads a prompt from stdin and writes responses to stdout/stderr. By default, rauf uses `claude`.
+
+Configure via `rauf.yaml`:
+
+```yaml
+harness: claude
+harness_args: "-p --output-format=stream-json --model sonnet --verbose"
+```
+
+Or for other harnesses:
+
+```yaml
+harness: opencode
+harness_args: "--non-interactive"
+```
+
+Environment variables:
+- `RAUF_HARNESS`: Harness command
+- `RAUF_HARNESS_ARGS`: Additional arguments
 
 ## Backpressure system
 
-When an iteration fails (guardrail violation, verification failure, no progress, etc.), rauf injects a **Backpressure Pack** into the next iteration's prompt. This creates a feedback loop that helps the agent self-correct:
+When an iteration fails, rauf injects a **Backpressure Pack** into the next iteration's prompt:
 
 | Trigger | Backpressure Action |
 |---------|---------------------|
@@ -89,143 +264,168 @@ When an iteration fails (guardrail violation, verification failure, no progress,
 | Harness retries (rate limits, timeouts) | Advise reducing output/tool calls |
 | No progress | Suggest scope reduction or alternative strategy |
 
-The agent is expected to respond with a `## Backpressure Response` section acknowledging the issue before proceeding. Missing acknowledgment counts against progress.
+The agent should respond with a `## Backpressure Response` section. Missing acknowledgment counts against progress.
 
 ## Loop mechanics
 
-Each iteration is a fresh harness run. The runner re-reads repo state from disk,
-does one unit of work, then exits. The only state that carries across iterations
-is via files (especially `IMPLEMENTATION_PLAN.md`) and git history, keeping
-context and memory filesystem-centered.
+Each iteration is a fresh harness run. State carries across iterations only via files and git history.
 
-Looping does not run forever by default. The runner stops when max iterations
-is reached, when there are no unchecked tasks in build mode, or when an
-iteration makes no changes (no new commit, clean working tree, no plan changes).
-In strategy mode, the no-progress counter carries across steps until progress or exit.
-Ctrl+C interrupts the current run and exits immediately.
+The loop stops when:
+- Max iterations reached
+- No unchecked tasks remain (build mode)
+- No changes detected (no commit, clean worktree, unchanged plan)
+- `RAUF_COMPLETE` sentinel emitted by agent
 
-Harness errors are not retried automatically unless you enable bounded retries
-via config or env. If the harness exits non-zero (including rate limits), the
-run stops and returns a failure by default.
+Ctrl+C interrupts immediately.
 
 ## Completion contracts
 
-Every spec must define how "done" is objectively detected. This keeps the loop
-finite and makes agent output verifiable.
+Every spec must define how "done" is objectively detected:
+- The explicit success condition
+- The exact `Verify:` command(s)
+- Any artifacts that must exist
 
-Completion contracts should include:
-- The explicit success condition (what is true when the task is complete)
-- The exact `Verify:` command(s) used to validate it
-- Any completion flags or artifacts that must exist
+Build agents can emit `RAUF_COMPLETE` to signal early completion when all criteria are met.
 
 ## Files rauf cares about
 
 | File | Purpose |
 |------|---------|
 | `specs/*.md` | Approved specifications |
-| `IMPLEMENTATION_PLAN.md` | Executable task list (or `.rauf/IMPLEMENTATION_PLAN.md` for plan-work) |
-| `AGENTS.md` | Operational contract |
-| `PROMPT_*.md` | Agent instructions |
+| `IMPLEMENTATION_PLAN.md` | Executable task list |
+| `.rauf/IMPLEMENTATION_PLAN.md` | Branch-scoped plan (from `plan-work`) |
+| `AGENTS.md` | Operational contract with repo commands |
+| `PROMPT_architect.md` | Prompt for architect mode |
+| `PROMPT_plan.md` | Prompt for plan mode |
+| `PROMPT_build.md` | Prompt for build mode |
 | `.rauf/state.json` | Persistent loop state |
-| `.rauf/context.md` | Optional additional context injected into prompts |
-| `.rauf/state.md` | Human-readable summary of latest state |
+| `.rauf/context.md` | Optional context injected into prompts |
+| `.rauf/state.md` | Human-readable state summary |
+| `rauf.yaml` | Configuration |
 
-Task format note: unchecked tasks must use `- [ ]` or `- [x]` for rauf to detect them.
+## Safety and control
 
-## Harnesses
+Guardrails to keep autonomous loops predictable:
+- **Runtime isolation**: `host`, `docker`, or `docker-persist`
+- **Circuit breakers**: `max_files_changed`, `max_commits_per_iteration`, `no_progress_iterations`
+- **Hard limits**: Per-step `iterations` and `until` conditions in strategy mode
 
-By default, rauf uses `claude`, but any stdin/stdout-compatible harness
-can be configured.
+## Config reference
 
-A "harness" is any executable that:
-- Reads a prompt from stdin
-- Writes responses to stdout/stderr
-- Can operate non-interactively
+Config lives in `rauf.yaml`. Environment variables override config values.
 
-See `rauf.yaml` for details.
+```yaml
+# Harness configuration
+harness: claude                    # Executable to run
+harness_args: ""                   # Arguments passed to harness
+
+# Git behavior
+no_push: false                     # Skip git push even with new commits
+
+# Logging
+log_dir: logs                      # Directory for JSONL logs
+
+# Runtime isolation
+runtime: host                      # host | docker | docker-persist
+docker_image: ""                   # Image for docker runtimes
+docker_args: ""                    # Extra docker run args
+docker_container: ""               # Container name for docker-persist
+
+# Guardrails (0 = disabled)
+max_files_changed: 0               # Max files changed per iteration
+max_commits_per_iteration: 0       # Max commits per iteration
+forbidden_paths: ""                # Comma-separated paths to block
+no_progress_iterations: 2          # Exit after N iterations without progress
+
+# Verification policies
+on_verify_fail: soft_reset         # soft_reset | keep_commit | hard_reset | no_push_only | wip_branch
+verify_missing_policy: strict      # strict | agent_enforced | fallback
+allow_verify_fallback: false       # Allow AGENTS.md Verify as fallback
+require_verify_on_change: false    # Require Verify when worktree changes
+require_verify_for_plan_update: false  # Require Verify before plan updates
+plan_lint_policy: warn             # warn | fail | off
+
+# Retry configuration
+retry_on_failure: false            # Retry on harness errors
+retry_max_attempts: 3              # Max retry attempts
+retry_backoff_base: 2s             # Initial backoff duration
+retry_backoff_max: 30s             # Maximum backoff duration
+retry_jitter: true                 # Add randomness to backoff
+retry_match: "rate limit,429,overloaded,timeout"  # Error patterns to retry
+
+# Strategy (optional - overrides single-mode execution)
+strategy:
+  - mode: plan
+    iterations: 1
+  - mode: build
+    iterations: 5
+    until: verify_pass
+```
+
+### Policy explanations
+
+| Policy | Options | Description |
+|--------|---------|-------------|
+| `on_verify_fail` | `soft_reset` | Keep changes staged, drop commit |
+| | `keep_commit` | Keep the commit despite failure |
+| | `hard_reset` | Discard all changes |
+| | `no_push_only` | Keep commit locally, skip push |
+| | `wip_branch` | Move commit to `wip/verify-fail-*` branch |
+| `verify_missing_policy` | `strict` | Exit with error if Verify missing |
+| | `agent_enforced` | Continue, agent must add Verify |
+| | `fallback` | Use AGENTS.md Verify fallback |
+
+## Environment variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `RAUF_HARNESS` | Harness command | `claude` |
+| `RAUF_HARNESS_ARGS` | Extra harness args | - |
+| `RAUF_NO_PUSH` | Skip git push | `false` |
+| `RAUF_LOG_DIR` | Logs directory | `logs` |
+| `RAUF_RUNTIME` | Runtime target | `host` |
+| `RAUF_DOCKER_IMAGE` | Docker image | - |
+| `RAUF_DOCKER_ARGS` | Docker run args | - |
+| `RAUF_DOCKER_CONTAINER` | Container name | - |
+| `RAUF_ON_VERIFY_FAIL` | Verify fail behavior | `soft_reset` |
+| `RAUF_VERIFY_MISSING_POLICY` | Missing Verify policy | `strict` |
+| `RAUF_ALLOW_VERIFY_FALLBACK` | Allow fallback | `false` |
+| `RAUF_REQUIRE_VERIFY_ON_CHANGE` | Require Verify on change | `false` |
+| `RAUF_REQUIRE_VERIFY_FOR_PLAN_UPDATE` | Require Verify for plan | `false` |
+| `RAUF_RETRY` | Enable retry | `false` |
+| `RAUF_RETRY_MAX` | Max retries | `3` |
+| `RAUF_RETRY_BACKOFF_BASE` | Base backoff | `2s` |
+| `RAUF_RETRY_BACKOFF_MAX` | Max backoff | `30s` |
+| `RAUF_RETRY_NO_JITTER` | Disable jitter | `false` |
+| `RAUF_RETRY_MATCH` | Retry patterns | `rate limit,429,overloaded,timeout` |
 
 ## Common failure modes
 
 | Symptom | Likely Cause | Fix |
 |---------|--------------|-----|
-| Planner creates tasks without Verify | Spec missing verification | Fix spec or plan |
+| Planner creates tasks without Verify | Spec missing verification | Add Verify to spec |
 | Builder makes no changes | Task already satisfied | Check plan/spec |
-| Infinite loops | Verification never passes | Check verify commands or harness output |
-| Repeated guardrail blocks | Agent keeps hitting forbidden paths | Review `forbidden_paths` config |
-
-## Safety and control
-
-`rauf` ships guardrails so autonomous loops stay predictable:
-- Tiered autonomy via `yolo` and runtime isolation (host vs. docker)
-- Circuit breakers via `max_files_changed`, `max_commits_per_iteration`, and `no_progress_iterations`
-- Hard limits via per-step `iterations` and `until` conditions in strategy mode
-
-## Config (rauf.yaml)
-
-Config lives in `rauf.yaml` at repo root. Environment variables override config.
-
-```yaml
-harness: claude
-harness_args: ""
-no_push: false
-yolo: false
-log_dir: logs
-runtime: host # host | docker | docker-persist
-docker_image: ""
-docker_args: ""
-docker_container: ""
-max_files_changed: 0
-max_commits_per_iteration: 0
-forbidden_paths: ""
-no_progress_iterations: 2
-on_verify_fail: soft_reset # soft_reset | keep_commit | hard_reset | no_push_only | wip_branch
-verify_missing_policy: strict # strict | agent_enforced | fallback
-plan_lint_policy: warn # warn | fail | off
-allow_verify_fallback: false
-require_verify_on_change: false
-require_verify_for_plan_update: false
-retry_on_failure: false
-retry_max_attempts: 3
-retry_backoff_base: 2s
-retry_backoff_max: 30s
-retry_jitter: true
-retry_match: "rate limit,429,overloaded,timeout"
-model:
-  architect: opus
-  plan: opus
-  build: sonnet
-strategy:
-  - mode: plan
-    model: opus
-    iterations: 1
-  - mode: build
-    model: sonnet
-    iterations: 5
-    until: verify_pass
-```
-
-### Config notes
-
-- `on_verify_fail` controls git hygiene when verification fails; default `soft_reset` keeps changes staged and drops the commit from `HEAD`.
-- `verify_missing_policy` controls what happens if a task has no `Verify:` command; default `strict` exits with a clear error.
-- `plan_lint_policy` controls whether non-atomic plan tasks are warned or fail the build; default `warn`.
-- `runtime: docker-persist` reuses a long-lived container; stop/remove it with `docker stop <name>` / `docker rm <name>` if needed.
-- Build agents can emit `RAUF_COMPLETE` to end an iteration early after finishing work.
-- When `RAUF_COMPLETE` is accepted in build mode, logs record `exit_reason: completion_contract_satisfied` plus `completion_specs` and `completion_artifacts`.
+| Infinite loops | Verification never passes | Check verify commands |
+| Repeated guardrail blocks | Hitting forbidden paths | Review `forbidden_paths` |
+| "No unchecked tasks" immediately | All tasks marked `[x]` | Uncheck tasks or add new ones |
 
 ## SpecFirst import
 
-`rauf import` pulls a completed [SpecFirst](https://github.com/mhingston/SpecFirst) stage artifact into `specs/` once.
-
-Defaults:
-- Stage: `requirements`
-- SpecFirst dir: `.specfirst`
-
-Example:
+Import completed [SpecFirst](https://github.com/mhingston/SpecFirst) artifacts:
 
 ```bash
 rauf import --stage requirements --slug user-auth
 ```
+
+Options:
+- `--stage`: Stage to import (default: `requirements`)
+- `--slug`: Artifact slug (required)
+- `--dir`: SpecFirst directory (default: `.specfirst`)
+- `--force`: Overwrite existing spec
+
+## Logs
+
+Each run writes to `logs/<mode>-<timestamp>.jsonl`. The `rauf init` command adds `logs/` to `.gitignore`.
 
 ## Development
 
@@ -234,34 +434,3 @@ make fmt      # Format code
 make lint     # Run go vet
 make test     # Run tests
 ```
-
-## Logs
-
-Each run writes to `logs/<mode>-<timestamp>.jsonl` in the working directory.
-`rauf init` also adds `logs/` to `.gitignore` if it is not already present.
-
-## Environment variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `RAUF_YOLO` | Enable `--dangerously-skip-permissions` (build only) | `false` |
-| `RAUF_MODEL_OVERRIDE` | Override model selection for all modes | - |
-| `RAUF_HARNESS` | Harness command | `claude` |
-| `RAUF_HARNESS_ARGS` | Extra harness args (non-claude harnesses) | - |
-| `RAUF_NO_PUSH` | Skip git push even if new commits exist | `false` |
-| `RAUF_LOG_DIR` | Override logs directory | `logs` |
-| `RAUF_RUNTIME` | Runtime execution target | `host` |
-| `RAUF_DOCKER_IMAGE` | Docker image for docker runtimes | - |
-| `RAUF_DOCKER_ARGS` | Extra args for docker run | - |
-| `RAUF_DOCKER_CONTAINER` | Container name for docker-persist | - |
-| `RAUF_ON_VERIFY_FAIL` | Git behavior on verify fail | `soft_reset` |
-| `RAUF_VERIFY_MISSING_POLICY` | Policy when Verify missing | `strict` |
-| `RAUF_ALLOW_VERIFY_FALLBACK` | Allow AGENTS.md Verify fallback | `false` |
-| `RAUF_REQUIRE_VERIFY_ON_CHANGE` | Require Verify when worktree changes | `false` |
-| `RAUF_REQUIRE_VERIFY_FOR_PLAN_UPDATE` | Require Verify before plan updates | `false` |
-| `RAUF_RETRY` | Retry harness failures (matches only) | `false` |
-| `RAUF_RETRY_MAX` | Max retry attempts | `3` |
-| `RAUF_RETRY_BACKOFF_BASE` | Base backoff duration | `2s` |
-| `RAUF_RETRY_BACKOFF_MAX` | Max backoff duration | `30s` |
-| `RAUF_RETRY_NO_JITTER` | Disable backoff jitter | `false` |
-| `RAUF_RETRY_MATCH` | Comma-separated match tokens | `rate limit,429,overloaded,timeout` |

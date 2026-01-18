@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,6 +28,14 @@ const (
 var version = "dev"
 
 var defaultRetryMatch = []string{"rate limit", "429", "overloaded", "timeout"}
+
+// jitterRng is used by jitterDuration to add randomness to retry delays.
+// Initialized once at startup to avoid repeated seeding on each call.
+// Protected by jitterMu for thread safety.
+var (
+	jitterRng = rand.New(rand.NewSource(time.Now().UnixNano()))
+	jitterMu  sync.Mutex
+)
 
 type modeConfig struct {
 	mode          string
@@ -46,9 +55,7 @@ type modeConfig struct {
 type runtimeConfig struct {
 	Harness                    string
 	HarnessArgs                string
-	Model                      map[string]string
 	NoPush                     bool
-	Yolo                       bool
 	LogDir                     string
 	Runtime                    string
 	DockerImage                string
@@ -136,22 +143,6 @@ func main() {
 	gitAvailable := err == nil && branch != ""
 	planPath := resolvePlanPath(branch, gitAvailable, "IMPLEMENTATION_PLAN.md")
 	cfg.planPath = planPath
-
-	model := defaultModel(cfg.mode)
-	if fileCfg.Model != nil {
-		if configuredModel, ok := fileCfg.Model[cfg.mode]; ok && configuredModel != "" {
-			model = configuredModel
-		}
-	}
-	if override := envFirst("RAUF_MODEL_OVERRIDE"); override != "" {
-		model = override
-	}
-
-	yolo := fileCfg.Yolo
-	if value, ok := envBool("RAUF_YOLO"); ok {
-		yolo = value
-	}
-	yoloEnabled := cfg.mode == "build" && yolo
 
 	noPush := fileCfg.NoPush
 	if value, ok := envBool("RAUF_NO_PUSH"); ok {
@@ -279,10 +270,6 @@ func main() {
 	if cfg.maxIterations > 0 {
 		fmt.Printf("Max:    %d iterations\n", cfg.maxIterations)
 	}
-	fmt.Printf("Model:  %s\n", model)
-	if yoloEnabled {
-		fmt.Println("YOLO:   enabled (build only)")
-	}
 	fmt.Printf("Harness: %s\n", harness)
 	if runtime != "" && runtime != "host" {
 		fmt.Printf("Runtime: %s\n", runtime)
@@ -326,11 +313,11 @@ func main() {
 	}
 
 	if len(fileCfg.Strategy) > 0 && !cfg.explicitMode {
-		runStrategy(cfg, fileCfg, runner, state, gitAvailable, branch, planPath, model, yoloEnabled, harness, harnessArgs, noPush, logDir, retryEnabled, retryMaxAttempts, retryBackoffBase, retryBackoffMax, retryJitter, retryMatch)
+		runStrategy(cfg, fileCfg, runner, state, gitAvailable, branch, planPath, harness, harnessArgs, noPush, logDir, retryEnabled, retryMaxAttempts, retryBackoffBase, retryBackoffMax, retryJitter, retryMatch)
 		return
 	}
 
-	runMode(cfg, fileCfg, runner, state, gitAvailable, branch, planPath, model, yoloEnabled, harness, harnessArgs, noPush, logDir, retryEnabled, retryMaxAttempts, retryBackoffBase, retryBackoffMax, retryJitter, retryMatch, 0)
+	runMode(cfg, fileCfg, runner, state, gitAvailable, branch, planPath, harness, harnessArgs, noPush, logDir, retryEnabled, retryMaxAttempts, retryBackoffBase, retryBackoffMax, retryJitter, retryMatch, 0)
 }
 
 func parseArgs(args []string) (modeConfig, error) {
@@ -464,7 +451,6 @@ func parseImportArgs(args []string, cfg *modeConfig) error {
 
 func loadConfig(path string) (runtimeConfig, bool, error) {
 	cfg := runtimeConfig{
-		Model:               make(map[string]string),
 		RetryMaxAttempts:    3,
 		RetryBackoffBase:    2 * time.Second,
 		RetryBackoffMax:     30 * time.Second,
@@ -494,6 +480,8 @@ func parseConfigBytes(data []byte, cfg *runtimeConfig) error {
 	section := ""
 	var strategyCurrent *strategyStep
 	var inForbiddenPaths bool
+	var skipMultilineKey string // Track if we're skipping multi-line content
+	var multilineIndent int     // Track the base indent of the multi-line key
 	for scanner.Scan() {
 		line := scanner.Text()
 		trimmed := strings.TrimSpace(line)
@@ -501,9 +489,30 @@ func parseConfigBytes(data []byte, cfg *runtimeConfig) error {
 			continue
 		}
 		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+
+		// If we're in a multi-line skip mode, check if we should exit
+		if skipMultilineKey != "" {
+			// Multi-line content ends when we see a line with equal or less indent than the key
+			if indent <= multilineIndent && trimmed != "" {
+				skipMultilineKey = ""
+				multilineIndent = 0
+				// Fall through to process this line normally
+			} else {
+				// Still in multi-line content, skip this line
+				continue
+			}
+		}
+
 		key, value, ok := splitYAMLKeyValue(trimmed)
 		if ok {
-			value = stripQuotes(value)
+			// Check for multi-line YAML syntax which is not supported
+			if value == "|" || value == ">" || value == "|-" || value == ">-" || value == "|+" || value == ">+" {
+				fmt.Fprintf(os.Stderr, "Warning: rauf.yaml key %q uses multi-line YAML syntax which is not supported; value will be empty\n", key)
+				skipMultilineKey = key
+				multilineIndent = indent
+				continue
+			}
+			value = stripQuotesAndComments(value)
 		}
 
 		if indent == 0 {
@@ -522,10 +531,6 @@ func parseConfigBytes(data []byte, cfg *runtimeConfig) error {
 			case "no_push":
 				if v, ok := parseBool(value); ok {
 					cfg.NoPush = v
-				}
-			case "yolo":
-				if v, ok := parseBool(value); ok {
-					cfg.Yolo = v
 				}
 			case "log_dir":
 				cfg.LogDir = value
@@ -597,19 +602,9 @@ func parseConfigBytes(data []byte, cfg *runtimeConfig) error {
 				cfg.RetryMatch = splitCommaList(value)
 			case "plan_lint_policy":
 				cfg.PlanLintPolicy = value
-			case "model":
-				section = "model"
 			case "strategy":
 				section = "strategy"
 			}
-			continue
-		}
-
-		if section == "model" {
-			if cfg.Model == nil {
-				cfg.Model = make(map[string]string)
-			}
-			cfg.Model[key] = value
 			continue
 		}
 
@@ -650,8 +645,6 @@ func assignStrategyField(step *strategyStep, key, value string) {
 	switch key {
 	case "mode":
 		step.Mode = value
-	case "model":
-		step.Model = value
 	case "iterations":
 		if v, err := strconv.Atoi(value); err == nil && v >= 0 {
 			step.Iterations = v
@@ -671,6 +664,38 @@ func splitYAMLKeyValue(line string) (string, string, bool) {
 	key := strings.TrimSpace(parts[0])
 	value := strings.TrimSpace(parts[1])
 	return key, value, true
+}
+
+// stripQuotesAndComments removes surrounding quotes and trailing inline comments.
+// Inline comments start with # when not inside quotes.
+func stripQuotesAndComments(value string) string {
+	if len(value) == 0 {
+		return value
+	}
+
+	// If quoted, extract the quoted content (handles embedded #)
+	if len(value) >= 2 {
+		if (value[0] == '"' && value[len(value)-1] == '"') ||
+			(value[0] == '\'' && value[len(value)-1] == '\'') {
+			return value[1 : len(value)-1]
+		}
+		// Check for quote at start with comment after closing quote
+		if value[0] == '"' || value[0] == '\'' {
+			quote := value[0]
+			for i := 1; i < len(value); i++ {
+				if value[i] == quote {
+					return value[1:i]
+				}
+			}
+		}
+	}
+
+	// Unquoted value: strip inline comment
+	if idx := strings.Index(value, " #"); idx >= 0 {
+		value = strings.TrimSpace(value[:idx])
+	}
+
+	return value
 }
 
 func stripQuotes(value string) string {
@@ -694,11 +719,11 @@ func parseBool(value string) (bool, bool) {
 	}
 }
 
-func runHarness(ctx context.Context, prompt string, harness, harnessArgs, model string, yoloEnabled bool, logFile *os.File, retry retryConfig, runner runtimeExec) (harnessResult, error) {
+func runHarness(ctx context.Context, prompt string, harness, harnessArgs string, logFile *os.File, retry retryConfig, runner runtimeExec) (harnessResult, error) {
 	attempts := 0
 	matchedToken := ""
 	for {
-		output, err := runHarnessOnce(ctx, prompt, harness, harnessArgs, model, yoloEnabled, logFile, runner)
+		output, err := runHarnessOnce(ctx, prompt, harness, harnessArgs, logFile, runner)
 		if err == nil {
 			return harnessResult{Output: output, RetryCount: attempts, RetryReason: matchedToken}, nil
 		}
@@ -729,22 +754,8 @@ func runHarness(ctx context.Context, prompt string, harness, harnessArgs, model 
 	}
 }
 
-func runHarnessOnce(ctx context.Context, prompt string, harness, harnessArgs, model string, yoloEnabled bool, logFile *os.File, runner runtimeExec) (string, error) {
+func runHarnessOnce(ctx context.Context, prompt string, harness, harnessArgs string, logFile *os.File, runner runtimeExec) (string, error) {
 	args := []string{}
-	switch harness {
-	case "claude":
-		args = append(args, "-p")
-		if yoloEnabled {
-			args = append(args, "--dangerously-skip-permissions")
-		}
-		args = append(args,
-			"--output-format=stream-json",
-			"--model", model,
-			"--verbose",
-		)
-	default:
-		// Generic harness that reads prompt from stdin.
-	}
 	if harnessArgs != "" {
 		extraArgs, err := splitArgs(harnessArgs)
 		if err != nil {
@@ -784,13 +795,6 @@ func openLogFile(mode string, logDir string) (*os.File, string, error) {
 	}
 
 	return file, path, nil
-}
-
-func defaultModel(mode string) string {
-	if mode == "build" {
-		return "sonnet"
-	}
-	return "opus"
 }
 
 func gitOutput(args ...string) (string, error) {
@@ -952,10 +956,8 @@ func printUsage() {
 	fmt.Println("  rauf plan-work \"add oauth\"")
 	fmt.Println("")
 	fmt.Println("Env:")
-	fmt.Println("  RAUF_YOLO=1             Enable --dangerously-skip-permissions (build only)")
-	fmt.Println("  RAUF_MODEL_OVERRIDE=x   Override model selection for all modes")
 	fmt.Println("  RAUF_HARNESS=claude     Harness command (default: claude)")
-	fmt.Println("  RAUF_HARNESS_ARGS=...   Extra harness args (non-claude harnesses)")
+	fmt.Println("  RAUF_HARNESS_ARGS=...   Extra harness args")
 	fmt.Println("  RAUF_NO_PUSH=1          Skip git push even if new commits exist")
 	fmt.Println("  RAUF_LOG_DIR=path       Override logs directory")
 	fmt.Println("  RAUF_RUNTIME=host|docker|docker-persist Runtime execution target")
@@ -1063,12 +1065,29 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	if len(p) >= b.max {
-		b.buf = append(b.buf[:0], p[len(p)-b.max:]...)
+		b.buf = make([]byte, b.max)
+		copy(b.buf, p[len(p)-b.max:])
 		return len(p), nil
 	}
 	if len(b.buf)+len(p) > b.max {
 		drop := len(b.buf) + len(p) - b.max
-		b.buf = b.buf[drop:]
+		// Defensive check: ensure drop doesn't exceed buffer length
+		if drop > len(b.buf) {
+			drop = len(b.buf)
+		}
+		if drop < 0 {
+			drop = 0
+		}
+		remaining := len(b.buf) - drop
+		if remaining < 0 {
+			remaining = 0
+		}
+		// Create a new slice to avoid retaining old backing array memory
+		newBuf := make([]byte, remaining, b.max)
+		if remaining > 0 {
+			copy(newBuf, b.buf[drop:])
+		}
+		b.buf = newBuf
 	}
 	b.buf = append(b.buf, p...)
 	return len(p), nil
@@ -1119,8 +1138,9 @@ func jitterDuration(delay time.Duration) time.Duration {
 	if delay <= 0 {
 		return delay
 	}
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	factor := 0.5 + rng.Float64()
+	jitterMu.Lock()
+	factor := 0.5 + jitterRng.Float64()
+	jitterMu.Unlock()
 	return time.Duration(float64(delay) * factor)
 }
 
@@ -1323,9 +1343,23 @@ func hasAgentsPlaceholders(path string) bool {
 }
 
 func readSpecfirstArtifacts(root, stage, hash string, files []string) ([]artifactFile, error) {
+	baseDir := filepath.Join(root, "artifacts", stage, hash)
+	absBaseDir, err := filepath.Abs(baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve artifact base directory: %w", err)
+	}
 	artifacts := make([]artifactFile, 0, len(files))
 	for _, name := range files {
-		path := filepath.Join(root, "artifacts", stage, hash, name)
+		// Validate filename doesn't escape base directory via path traversal
+		path := filepath.Join(baseDir, name)
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve artifact path %s: %w", name, err)
+		}
+		// Ensure resolved path is within the expected directory
+		if !strings.HasPrefix(absPath, absBaseDir+string(filepath.Separator)) && absPath != absBaseDir {
+			return nil, fmt.Errorf("artifact path %q escapes base directory", name)
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read artifact %s: %w", path, err)
@@ -1876,7 +1910,6 @@ const configTemplate = `# rauf configuration
 harness: claude
 harness_args: ""
 no_push: false
-yolo: false
 log_dir: logs
 runtime: host # host | docker | docker-persist
 docker_image: ""
@@ -1897,16 +1930,10 @@ retry_backoff_base: 2s
 retry_backoff_max: 30s
 retry_jitter: true
 retry_match: "rate limit,429,overloaded,timeout"
-model:
-  architect: opus
-  plan: opus
-  build: sonnet
 strategy:
   - mode: plan
-    model: opus
     iterations: 1
   - mode: build
-    model: sonnet
     iterations: 5
     until: verify_pass
 `

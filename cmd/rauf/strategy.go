@@ -6,7 +6,6 @@ import (
 
 type strategyStep struct {
 	Mode       string
-	Model      string
 	Iterations int
 	Until      string
 	If         string

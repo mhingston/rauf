@@ -127,12 +127,11 @@ func TestSlugify(t *testing.T) {
 }
 
 func TestParseConfigBytes(t *testing.T) {
-	cfg := runtimeConfig{Model: make(map[string]string)}
+	cfg := runtimeConfig{}
 	data := []byte(`
 harness: opencode
 harness_args: "--foo bar"
 no_push: true
-yolo: false
 log_dir: logs-out
 retry_on_failure: true
 retry_max_attempts: 4
@@ -140,10 +139,6 @@ retry_backoff_base: 1s
 retry_backoff_max: 10s
 retry_jitter: false
 retry_match: "rate limit,429"
-model:
-  architect: opus
-  plan: opus
-  build: sonnet
 `)
 	if err := parseConfigBytes(data, &cfg); err != nil {
 		t.Fatalf("parse config failed: %v", err)
@@ -154,7 +149,7 @@ model:
 	if cfg.LogDir != "logs-out" {
 		t.Fatalf("unexpected log dir: %q", cfg.LogDir)
 	}
-	if !cfg.NoPush || cfg.Yolo {
+	if !cfg.NoPush {
 		t.Fatalf("unexpected bool config")
 	}
 	if !cfg.RetryOnFailure || cfg.RetryMaxAttempts != 4 {
@@ -169,7 +164,57 @@ model:
 	if len(cfg.RetryMatch) != 2 || cfg.RetryMatch[0] != "rate limit" || cfg.RetryMatch[1] != "429" {
 		t.Fatalf("unexpected retry match config")
 	}
-	if cfg.Model["build"] != "sonnet" {
-		t.Fatalf("unexpected model map")
+}
+
+func TestExtractQuestionsIgnoresCodeFences(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "simple question",
+			input:    "RAUF_QUESTION: What is your name?",
+			expected: []string{"What is your name?"},
+		},
+		{
+			name:     "question inside code fence ignored",
+			input:    "```\nRAUF_QUESTION: Should be ignored\n```",
+			expected: []string{},
+		},
+		{
+			name:     "question inside tilde fence ignored",
+			input:    "~~~\nRAUF_QUESTION: Should be ignored\n~~~",
+			expected: []string{},
+		},
+		{
+			name:     "question after code fence detected",
+			input:    "```\ncode block\n```\nRAUF_QUESTION: Real question",
+			expected: []string{"Real question"},
+		},
+		{
+			name:     "multiple questions",
+			input:    "RAUF_QUESTION: First\nSome text\nRAUF_QUESTION: Second",
+			expected: []string{"First", "Second"},
+		},
+		{
+			name:     "question in nested fence ignored",
+			input:    "````\nRAUF_QUESTION: Outer\n```\nRAUF_QUESTION: Inner\n```\n````\nRAUF_QUESTION: Outside",
+			expected: []string{"Outside"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := extractQuestions(tc.input)
+			if len(result) != len(tc.expected) {
+				t.Errorf("extractQuestions() = %v, want %v", result, tc.expected)
+				return
+			}
+			for i, q := range result {
+				if q != tc.expected[i] {
+					t.Errorf("extractQuestions()[%d] = %q, want %q", i, q, tc.expected[i])
+				}
+			}
+		})
 	}
 }

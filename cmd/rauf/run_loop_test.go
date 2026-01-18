@@ -107,8 +107,6 @@ func TestRunStrategyNoProgressStops(t *testing.T) {
 		false,
 		"",
 		"IMPLEMENTATION_PLAN.md",
-		"test",
-		false,
 		os.Args[0],
 		"-test.run=TestHarnessHelperProcess",
 		true,

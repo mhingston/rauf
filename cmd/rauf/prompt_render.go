@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+	"unicode/utf8"
 )
 
 type promptData struct {
@@ -314,7 +315,12 @@ func truncateHead(value string, max int) string {
 	if len(value) <= max {
 		return value
 	}
-	return value[:max]
+	// Truncate by bytes, then back up to valid UTF-8 boundary
+	truncated := value[:max]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated
 }
 
 func truncateTail(value string, max int) string {
@@ -324,7 +330,12 @@ func truncateTail(value string, max int) string {
 	if len(value) <= max {
 		return value
 	}
-	return value[len(value)-max:]
+	// Truncate by bytes from end, then advance to valid UTF-8 boundary
+	start := len(value) - max
+	for start < len(value) && !utf8.RuneStart(value[start]) {
+		start++
+	}
+	return value[start:]
 }
 
 func minInt(a, b int) int {

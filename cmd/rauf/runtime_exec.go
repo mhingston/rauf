@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -117,14 +118,21 @@ func (r runtimeExec) dockerContainerName(workdir string) string {
 	if base == "" || base == "." || base == string(filepath.Separator) {
 		base = "workspace"
 	}
-	return "rauf-" + slugify(base)
+	// Include a short hash of the full path to avoid collisions when
+	// different projects have the same directory name
+	hash := sha256.Sum256([]byte(workdir))
+	shortHash := fmt.Sprintf("%x", hash[:4])
+	return "rauf-" + slugify(base) + "-" + shortHash
 }
 
 func (r runtimeExec) ensureDockerContainer(ctx context.Context, name, workdir string) error {
 	if r.DockerImage == "" {
 		return errors.New("docker runtime requires docker_image")
 	}
-	running, exists := r.dockerContainerState(ctx, name)
+	running, exists, err := r.dockerContainerState(ctx, name)
+	if err != nil {
+		return err
+	}
 	if exists && running {
 		return nil
 	}
@@ -152,12 +160,28 @@ func (r runtimeExec) ensureDockerContainer(ctx context.Context, name, workdir st
 	return cmd.Run()
 }
 
-func (r runtimeExec) dockerContainerState(ctx context.Context, name string) (bool, bool) {
+func (r runtimeExec) dockerContainerState(ctx context.Context, name string) (running bool, exists bool, err error) {
 	cmd := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}}", name)
-	output, err := cmd.Output()
-	if err != nil {
-		return false, false
+	output, cmdErr := cmd.Output()
+	if cmdErr != nil {
+		// Check if the error is because the container doesn't exist
+		if exitErr, ok := cmdErr.(*exec.ExitError); ok {
+			// Safely handle potentially nil Stderr
+			stderr := ""
+			if exitErr.Stderr != nil {
+				stderr = string(exitErr.Stderr)
+			}
+			if strings.Contains(stderr, "No such object") || strings.Contains(stderr, "not found") {
+				return false, false, nil
+			}
+			// Exit code 1 with no matching stderr message - container doesn't exist
+			if exitErr.ExitCode() == 1 && stderr == "" {
+				return false, false, nil
+			}
+		}
+		// Some other error (Docker daemon down, permissions, etc.)
+		return false, false, fmt.Errorf("docker inspect failed: %w", cmdErr)
 	}
 	value := strings.TrimSpace(string(output))
-	return value == "true", true
+	return value == "true", true, nil
 }

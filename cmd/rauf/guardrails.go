@@ -26,6 +26,8 @@ func enforceGuardrails(cfg runtimeConfig, headBefore, headAfter string) (bool, s
 		}
 	} else if status, err := gitOutputRaw("status", "--porcelain"); err == nil {
 		for _, line := range splitStatusLines(status) {
+			// Git porcelain v1 format: "XY PATH" where XY are 2 status chars followed by space
+			// Minimum valid: 2 status + 1 space + 1 char path = 4 chars
 			if len(line) < 4 {
 				continue
 			}
@@ -122,6 +124,8 @@ func listChangedFiles(headBefore, headAfter string) []string {
 		}
 	} else if status, err := gitOutputRaw("status", "--porcelain"); err == nil {
 		for _, line := range splitStatusLines(status) {
+			// Git porcelain v1 format: "XY PATH" where XY are 2 status chars followed by space
+			// Minimum valid: 2 status + 1 space + 1 char path = 4 chars
 			if len(line) < 4 {
 				continue
 			}
@@ -140,11 +144,100 @@ func parseStatusPath(value string) string {
 	if value == "" {
 		return ""
 	}
-	if strings.Contains(value, "->") {
-		parts := strings.Split(value, "->")
-		return strings.TrimSpace(parts[len(parts)-1])
+	// Check for rename indicator. Git format: "old path" -> "new path" or old -> new
+	// Only split on " -> " if it's outside quotes to avoid false positives
+	// for filenames containing " -> "
+	arrowIdx := findUnquotedArrow(value)
+	if arrowIdx >= 0 {
+		return unquoteGitPath(strings.TrimSpace(value[arrowIdx+4:]))
 	}
-	return value
+	// Git uses C-style quoting for paths with special characters
+	return unquoteGitPath(value)
+}
+
+// findUnquotedArrow finds " -> " outside of quoted strings.
+// Returns the index of the space before "->", or -1 if not found.
+func findUnquotedArrow(s string) int {
+	inQuote := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == '"' {
+			// Toggle quote state, handling escaped quotes
+			if !inQuote {
+				inQuote = true
+			} else if i > 0 && s[i-1] == '\\' {
+				// Escaped quote, stay in quote
+			} else {
+				inQuote = false
+			}
+			continue
+		}
+		if !inQuote && i+4 <= len(s) && s[i:i+4] == " -> " {
+			return i
+		}
+	}
+	return -1
+}
+
+// unquoteGitPath handles git's C-style quoting for paths with special characters.
+// Git quotes paths that contain special characters (spaces, non-ASCII, etc.)
+// using C-style escaping with surrounding double quotes.
+func unquoteGitPath(path string) string {
+	path = strings.TrimSpace(path)
+	if len(path) < 2 || path[0] != '"' || path[len(path)-1] != '"' {
+		return path
+	}
+	// Remove surrounding quotes
+	inner := path[1 : len(path)-1]
+	// Handle common C-style escape sequences
+	var result strings.Builder
+	result.Grow(len(inner))
+	i := 0
+	for i < len(inner) {
+		if inner[i] == '\\' && i+1 < len(inner) {
+			switch inner[i+1] {
+			case '\\':
+				result.WriteByte('\\')
+				i += 2
+			case '"':
+				result.WriteByte('"')
+				i += 2
+			case 'n':
+				result.WriteByte('\n')
+				i += 2
+			case 't':
+				result.WriteByte('\t')
+				i += 2
+			case 'r':
+				result.WriteByte('\r')
+				i += 2
+			default:
+				// For octal sequences like \302\240, decode them
+				if i+3 < len(inner) && isOctalDigit(inner[i+1]) && isOctalDigit(inner[i+2]) && isOctalDigit(inner[i+3]) {
+					val := int(inner[i+1]-'0')*64 + int(inner[i+2]-'0')*8 + int(inner[i+3]-'0')
+					// Validate octal value is within byte range (0-255)
+					if val > 255 {
+						// Invalid octal sequence, preserve as-is
+						result.WriteByte(inner[i])
+						i++
+					} else {
+						result.WriteByte(byte(val))
+						i += 4
+					}
+				} else {
+					result.WriteByte(inner[i])
+					i++
+				}
+			}
+		} else {
+			result.WriteByte(inner[i])
+			i++
+		}
+	}
+	return result.String()
+}
+
+func isOctalDigit(b byte) bool {
+	return b >= '0' && b <= '7'
 }
 
 func splitLines(value string) []string {

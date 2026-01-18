@@ -8,7 +8,6 @@ import (
 type logEntry struct {
 	Type                string   `json:"type"`
 	Mode                string   `json:"mode,omitempty"`
-	Model               string   `json:"model,omitempty"`
 	Iteration           int      `json:"iteration,omitempty"`
 	VerifyCmd           string   `json:"verify_cmd,omitempty"`
 	VerifyStatus        string   `json:"verify_status,omitempty"`

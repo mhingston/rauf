@@ -7,6 +7,22 @@ import (
 	"strings"
 )
 
+// highSignalPatterns are pre-compiled patterns for extracting important error lines.
+// Compiled at package init time for performance.
+var highSignalPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bFAIL\b`),
+	regexp.MustCompile(`(?i)\bFAILED\b`),
+	regexp.MustCompile(`(?i)\bERROR\b`),
+	regexp.MustCompile(`(?i)\bpanic\b`),
+	regexp.MustCompile(`(?i)\bundefined\b`),
+	regexp.MustCompile(`(?i)no such file`),
+	regexp.MustCompile(`\w+\.\w+:\d+`), // file:line pattern (e.g., foo.go:42)
+	regexp.MustCompile(`^---\s*(FAIL|PASS):`),
+	regexp.MustCompile(`(?i)^=== (RUN|FAIL)`),
+	regexp.MustCompile(`(?i)expected.*got`),
+	regexp.MustCompile(`(?i)assertion failed`),
+}
+
 // formatGuardrailBackpressure converts a guardrail reason code into an actionable instruction.
 func formatGuardrailBackpressure(reason string) string {
 	if reason == "" {
@@ -37,66 +53,15 @@ func formatGuardrailBackpressure(reason string) string {
 // hasBackpressureResponse checks if the model output contains the required response header.
 // Returns true if the output contains "## Backpressure Response" outside of code fences.
 func hasBackpressureResponse(output string) bool {
-	inFence := false
-	fenceChar := byte(0)
-	fenceLen := 0
-	for _, line := range strings.Split(output, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if len(trimmed) >= 3 {
-			if !inFence {
-				if trimmed[0] == '`' || trimmed[0] == '~' {
-					fenceChar = trimmed[0]
-					fenceLen = 1
-					for fenceLen < len(trimmed) && trimmed[fenceLen] == fenceChar {
-						fenceLen++
-					}
-					if fenceLen >= 3 {
-						inFence = true
-						continue
-					}
-				}
-			} else if fenceChar != 0 {
-				count := 0
-				for count < len(trimmed) && trimmed[count] == fenceChar {
-					count++
-				}
-				if count >= fenceLen {
-					inFence = false
-					fenceChar = 0
-					fenceLen = 0
-					continue
-				}
-			}
-		}
-		if inFence {
-			continue
-		}
-		if strings.HasPrefix(trimmed, "## Backpressure Response") {
-			return true
-		}
-	}
-	return false
+	return scanLinesOutsideFence(output, func(trimmed string) bool {
+		return strings.HasPrefix(trimmed, "## Backpressure Response")
+	})
 }
 
 // summarizeVerifyOutput extracts high-signal error lines from verification output.
 func summarizeVerifyOutput(output string, maxLines int) []string {
 	if output == "" || maxLines <= 0 {
 		return nil
-	}
-
-	// Patterns that indicate high-signal error lines
-	highSignalPatterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)\bFAIL\b`),
-		regexp.MustCompile(`(?i)\bFAILED\b`),
-		regexp.MustCompile(`(?i)\bERROR\b`),
-		regexp.MustCompile(`(?i)\bpanic\b`),
-		regexp.MustCompile(`(?i)\bundefined\b`),
-		regexp.MustCompile(`(?i)no such file`),
-		regexp.MustCompile(`\w+\.\w+:\d+`), // file:line pattern (e.g., foo.go:42)
-		regexp.MustCompile(`^---\s*(FAIL|PASS):`),
-		regexp.MustCompile(`(?i)^=== (RUN|FAIL)`),
-		regexp.MustCompile(`(?i)expected.*got`),
-		regexp.MustCompile(`(?i)assertion failed`),
 	}
 
 	lines := strings.Split(output, "\n")

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type raufState struct {
@@ -40,16 +41,48 @@ func loadState() raufState {
 
 func saveState(state raufState) error {
 	path := statePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+
+	// Use atomic write: write to temp file then rename
+	// This prevents corruption if two processes write simultaneously
+	tempFile, err := os.CreateTemp(dir, ".state-*.json.tmp")
+	if err != nil {
 		return err
 	}
+	tempPath := tempFile.Name()
+
+	// Ensure cleanup on any error
+	success := false
+	defer func() {
+		if !success {
+			tempFile.Close()
+			os.Remove(tempPath)
+		}
+	}()
+
+	if _, err := tempFile.Write(data); err != nil {
+		return err
+	}
+	if err := tempFile.Sync(); err != nil {
+		return err
+	}
+	if err := tempFile.Close(); err != nil {
+		return err
+	}
+
+	// Atomic rename
+	if err := os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	success = true
+
 	return writeStateSummary(state)
 }
 
@@ -96,5 +129,10 @@ func truncateStateSummary(value string) string {
 	if len(value) <= maxSummaryBytes {
 		return value
 	}
-	return value[:maxSummaryBytes]
+	// Truncate by bytes, then back up to valid UTF-8 boundary
+	truncated := value[:maxSummaryBytes]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated
 }
