@@ -47,7 +47,7 @@ const (
 	defaultPlanIterations      = 1
 )
 
-var version = "v1.3.2"
+var version = "v1.3.3"
 
 var defaultRetryMatch = []string{"rate limit", "429", "overloaded", "timeout"}
 
@@ -997,9 +997,12 @@ var runHarnessOnce = func(ctx context.Context, prompt string, harness, harnessAr
 		logWriter = logFile
 	}
 
+	// Filter out RAUF_QUESTION: lines from stdout so the user sees only the interactive prompt
+	filteredStdout := newFilteringWriter(os.Stdout, "RAUF_QUESTION:")
+
 	writers := []io.Writer{logWriter, buffer}
 	if !runner.Quiet {
-		writers = append(writers, os.Stdout)
+		writers = append(writers, filteredStdout)
 	}
 	cmd.Stdout = io.MultiWriter(writers...)
 

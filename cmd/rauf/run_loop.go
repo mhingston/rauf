@@ -377,6 +377,9 @@ var runMode = func(parentCtx context.Context, cfg modeConfig, fileCfg runtimeCon
 			defer cancel()
 		}
 
+		if !runner.Quiet {
+			fmt.Fprintf(os.Stderr, "Sending prompt to model and waiting for response...\n")
+		}
 		harnessRes, err := runHarness(harnessCtx, promptContent, harness, effectiveHarnessArgs, logFile, retryCfg, runner)
 		iterStats.Attempts = harnessRes.RetryCount + 1 // retries + initial attempt
 		iterStats.Retries = harnessRes.RetryCount
