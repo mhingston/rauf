@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -29,15 +30,8 @@ func maxArchitectQuestionsForState(state raufState) int {
 
 // runArchitectQuestions handles interactive Q&A during architect mode.
 // It extracts RAUF_QUESTION: lines from output and prompts the user for answers.
-//
-// Known limitation: Go's stdin reads are blocking and cannot be interrupted.
-// If the context is cancelled or timeout occurs while waiting for user input,
-// the goroutine reading stdin will remain blocked until the user eventually
-// provides input (at which point it will exit cleanly). This is a fundamental
-// limitation of Go's I/O model, not a bug. In practice, this only affects
-// scenarios where the user cancels during a question prompt.
-func runArchitectQuestions(ctx context.Context, runner runtimeExec, promptContent *string, output string, state raufState, harness, harnessArgs string, logFile *os.File, retryCfg retryConfig) (string, bool) {
-	reader := bufio.NewReader(os.Stdin)
+func runArchitectQuestions(ctx context.Context, runner runtimeExec, promptContent *string, output string, state raufState, harness, harnessArgs string, logFile *os.File, retryCfg retryConfig, reader io.Reader, writer io.Writer) (string, bool) {
+	bufReader := bufio.NewReader(reader)
 	totalAsked := 0
 	updatedOutput := output
 	maxQuestions := maxArchitectQuestionsForState(state)
@@ -49,7 +43,7 @@ func runArchitectQuestions(ctx context.Context, runner runtimeExec, promptConten
 		default:
 		}
 
-		questions := extractQuestions(updatedOutput)
+		questions := extractTypedQuestions(updatedOutput)
 		if len(questions) == 0 || totalAsked >= maxQuestions {
 			break
 		}
@@ -59,40 +53,32 @@ func runArchitectQuestions(ctx context.Context, runner runtimeExec, promptConten
 				break
 			}
 			totalAsked++
-			fmt.Printf("Architect question: %s\n> ", q)
+			fmt.Fprintf(writer, "Architect question: %s\n> ", formatTypedQuestionForDisplay(q))
 
 			// Use a goroutine to read input so we can also check for context cancellation.
-			// Note: If context is cancelled or timeout occurs before user input, the goroutine
-			// will remain blocked on ReadString until input is received (stdin reads cannot be
-			// interrupted in Go). The goroutine will exit once any input is eventually provided.
 			inputChan := make(chan string, 1)
 			go func() {
-				text, _ := reader.ReadString('\n')
+				text, _ := bufReader.ReadString('\n')
 				select {
 				case inputChan <- strings.TrimSpace(text):
 				default:
-					// Channel not being read (timeout/cancel occurred), discard input
 				}
 			}()
 
 			var text string
 			select {
 			case <-ctx.Done():
-				// Goroutine may leak until user provides input; this is a known limitation
-				// of blocking stdin reads in Go.
 				return updatedOutput, totalAsked > 0
 			case text = <-inputChan:
 				// Got input from user
 			case <-time.After(5 * time.Minute):
-				// Timeout after 5 minutes of no input.
-				// Goroutine will exit once user eventually provides input.
 				text = "(no answer provided - timeout)"
 			}
 
 			if text == "" {
 				text = "(no answer provided)"
 			}
-			answers = append(answers, fmt.Sprintf("Q: %s\nA: %s", q, text))
+			answers = append(answers, fmt.Sprintf("Q: %s\nA: %s", formatTypedQuestionForDisplay(q), text))
 		}
 		if len(answers) == 0 {
 			break

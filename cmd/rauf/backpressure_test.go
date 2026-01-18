@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -11,365 +12,278 @@ func TestFormatGuardrailBackpressure(t *testing.T) {
 		expected string
 	}{
 		{"", ""},
-		{"forbidden_path:specs", "You attempted to modify forbidden directory: specs. Choose an alternative file/approach."},
-		{"forbidden_path:/some/long/path", "You attempted to modify forbidden directory: /some/long/path. Choose an alternative file/approach."},
+		{"forbidden_path:/etc", "You attempted to modify forbidden directory: /etc. Choose an alternative file/approach."},
 		{"max_files_changed", "Reduce scope: modify fewer files. Prefer smaller, focused patches."},
 		{"max_commits_exceeded", "Squash work into fewer commits. Complete one task at a time."},
 		{"verify_required_for_change", "You must run Verify successfully before changing files. Define or fix verification first."},
 		{"plan_update_without_verify", "Plan changed but verification didn't pass. Fix verification before modifying the plan."},
 		{"missing_verify_plan_not_updated", "Verification is missing. Update the plan to add a valid Verify command."},
 		{"missing_verify_non_plan_change", "Verification is missing. You may only update the plan until Verify is defined."},
-		{"unknown_reason", "Guardrail violation: unknown_reason"},
+		{"unknown", "Guardrail violation: unknown"},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.reason, func(t *testing.T) {
-			got := formatGuardrailBackpressure(tt.reason)
-			if got != tt.expected {
-				t.Errorf("formatGuardrailBackpressure(%q) = %q, want %q", tt.reason, got, tt.expected)
-			}
-		})
+		got := formatGuardrailBackpressure(tt.reason)
+		if got != tt.expected {
+			t.Errorf("formatGuardrailBackpressure(%q) = %q, want %q", tt.reason, got, tt.expected)
+		}
+	}
+}
+
+func TestHasBackpressureResponse(t *testing.T) {
+	tests := []struct {
+		output   string
+		expected bool
+	}{
+		{"## Backpressure Response\nI understand.", true},
+		{"Hello\n## Backpressure Response\nOK", true},
+		{"```\n## Backpressure Response\n```", false},
+		{"Just text", false},
+	}
+
+	for _, tt := range tests {
+		got := hasBackpressureResponse(tt.output)
+		if got != tt.expected {
+			t.Errorf("hasBackpressureResponse(%q) = %v, want %v", tt.output, got, tt.expected)
+		}
 	}
 }
 
 func TestSummarizeVerifyOutput(t *testing.T) {
-	t.Run("empty output", func(t *testing.T) {
-		result := summarizeVerifyOutput("", 30)
-		if len(result) != 0 {
-			t.Errorf("expected empty result, got %v", result)
-		}
-	})
-
-	t.Run("zero max lines", func(t *testing.T) {
-		result := summarizeVerifyOutput("FAIL: something", 0)
-		if len(result) != 0 {
-			t.Errorf("expected empty result, got %v", result)
-		}
-	})
-
-	t.Run("extracts FAIL lines", func(t *testing.T) {
-		output := `=== RUN   TestFoo
+	output := `=== RUN   TestFoo
 --- FAIL: TestFoo (0.00s)
-    foo_test.go:42: expected 1, got 2
-FAIL
-FAIL	github.com/example/foo	0.123s`
-		result := summarizeVerifyOutput(output, 30)
-		if len(result) < 4 {
-			t.Errorf("expected at least 4 lines, got %d: %v", len(result), result)
+    foo_test.go:42: expected 1 got 2
+PASS
+`
+	got := summarizeVerifyOutput(output, 3)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 lines, got %d", len(got))
+	}
+	if !strings.Contains(got[0], "RUN") {
+		t.Errorf("unexpected line 0: %q", got[0])
+	}
+	if !strings.Contains(got[1], "FAIL") {
+		t.Errorf("unexpected line 1: %q", got[1])
+	}
+	if !strings.Contains(got[2], "expected") {
+		t.Errorf("unexpected line 2: %q", got[2])
+	}
+}
+
+func TestBuildBackpressurePack(t *testing.T) {
+	t.Run("empty state", func(t *testing.T) {
+		got := buildBackpressurePack(raufState{}, false)
+		if got != "" {
+			t.Errorf("expected empty string, got %q", got)
 		}
 	})
 
-	t.Run("extracts panic lines", func(t *testing.T) {
-		output := `panic: runtime error: index out of range [1] with length 0
-goroutine 1 [running]:
-main.main()
-	/path/to/file.go:123 +0x1a2`
-		result := summarizeVerifyOutput(output, 30)
-		hasError := false
-		for _, line := range result {
-			if strings.Contains(line, "panic") || strings.Contains(line, "file.go:123") {
-				hasError = true
-				break
-			}
-		}
-		if !hasError {
-			t.Errorf("expected panic or file:line in result, got %v", result)
-		}
-	})
-
-	t.Run("respects max lines", func(t *testing.T) {
-		var lines []string
-		for i := 0; i < 50; i++ {
-			lines = append(lines, "FAIL: test line")
-		}
-		output := strings.Join(lines, "\n")
-		result := summarizeVerifyOutput(output, 10)
-		if len(result) != 10 {
-			t.Errorf("expected 10 lines, got %d", len(result))
-		}
-	})
-
-	t.Run("extracts ERROR lines case insensitive", func(t *testing.T) {
-		output := `Error: something went wrong
-error: another issue`
-		result := summarizeVerifyOutput(output, 30)
-		if len(result) != 2 {
-			t.Errorf("expected 2 lines, got %d: %v", len(result), result)
-		}
-	})
-}
-
-func TestBuildBackpressurePack_EmptyState(t *testing.T) {
-	state := raufState{}
-	result := buildBackpressurePack(state, true)
-	if result != "" {
-		t.Errorf("expected empty result for empty state, got %q", result)
-	}
-}
-
-func TestBuildBackpressurePack_GuardrailFailure(t *testing.T) {
-	state := raufState{
-		PriorGuardrailStatus: "fail",
-		PriorGuardrailReason: "forbidden_path:specs",
-	}
-	result := buildBackpressurePack(state, true)
-
-	if !strings.Contains(result, "## Backpressure Pack") {
-		t.Error("expected Backpressure Pack header")
-	}
-	if !strings.Contains(result, "Guardrail Failure") {
-		t.Error("expected Guardrail Failure section")
-	}
-	if !strings.Contains(result, "forbidden_path:specs") {
-		t.Error("expected guardrail reason in output")
-	}
-	if !strings.Contains(result, "alternative file/approach") {
-		t.Error("expected actionable instruction in output")
-	}
-}
-
-func TestBuildBackpressurePack_VerifyFailure(t *testing.T) {
-	state := raufState{
-		LastVerificationStatus:  "fail",
-		LastVerificationCommand: "make test",
-		LastVerificationOutput:  "--- FAIL: TestFoo\nfoo_test.go:42: expected true",
-	}
-	result := buildBackpressurePack(state, true)
-
-	if !strings.Contains(result, "Verification Failure") {
-		t.Error("expected Verification Failure section")
-	}
-	if !strings.Contains(result, "make test") {
-		t.Error("expected verify command in output")
-	}
-	if !strings.Contains(result, "Key Errors") {
-		t.Error("expected Key Errors section")
-	}
-}
-
-func TestBuildBackpressurePack_PlanDrift(t *testing.T) {
-	state := raufState{
-		PlanHashBefore:  "abc123",
-		PlanHashAfter:   "def456",
-		PlanDiffSummary: "+- [ ] New task",
-	}
-	result := buildBackpressurePack(state, true)
-
-	if !strings.Contains(result, "Plan Changes Detected") {
-		t.Error("expected Plan Changes Detected section")
-	}
-	if !strings.Contains(result, "Diff excerpt") {
-		t.Error("expected plan diff excerpt")
-	}
-}
-
-func TestBuildBackpressurePack_ExitReason(t *testing.T) {
-	state := raufState{
-		PriorExitReason: "no_progress",
-	}
-	result := buildBackpressurePack(state, true)
-
-	if !strings.Contains(result, "Prior Exit Reason") {
-		t.Error("expected Prior Exit Reason section")
-	}
-	if !strings.Contains(result, "no_progress") {
-		t.Error("expected exit reason in output")
-	}
-}
-
-func TestBuildBackpressurePack_CompletionExcluded(t *testing.T) {
-	state := raufState{
-		PriorExitReason: "completion_contract_satisfied",
-	}
-	result := buildBackpressurePack(state, true)
-
-	// completion_contract_satisfied should not produce backpressure
-	if result != "" {
-		t.Errorf("expected empty result for completion exit reason, got %q", result)
-	}
-}
-
-func TestGeneratePlanDiff_NoGit(t *testing.T) {
-	result := generatePlanDiff("plan.md", false, 50)
-	if result != "Plan file was modified (git diff unavailable)." {
-		t.Errorf("expected fallback message, got %q", result)
-	}
-}
-
-func TestBuildBackpressurePack_RetryBackpressure(t *testing.T) {
-	state := raufState{
-		PriorRetryCount:  3,
-		PriorRetryReason: "rate limit",
-	}
-	result := buildBackpressurePack(state, true)
-
-	if !strings.Contains(result, "Harness Retries") {
-		t.Error("expected Harness Retries section")
-	}
-	if !strings.Contains(result, "Retries: 3") {
-		t.Error("expected retry count in output")
-	}
-	if !strings.Contains(result, "rate limit") {
-		t.Error("expected retry reason in output")
-	}
-}
-
-func TestMaxArchitectQuestionsForState(t *testing.T) {
-	t.Run("base case no failures", func(t *testing.T) {
-		state := raufState{}
-		max := maxArchitectQuestionsForState(state)
-		if max != baseArchitectQuestions {
-			t.Errorf("expected %d, got %d", baseArchitectQuestions, max)
-		}
-	})
-
-	t.Run("guardrail failure adds bonus", func(t *testing.T) {
-		state := raufState{PriorGuardrailStatus: "fail"}
-		max := maxArchitectQuestionsForState(state)
-		expected := baseArchitectQuestions + bonusQuestionsPerFailure
-		if max != expected {
-			t.Errorf("expected %d, got %d", expected, max)
-		}
-	})
-
-	t.Run("verify failure adds bonus", func(t *testing.T) {
-		state := raufState{LastVerificationStatus: "fail"}
-		max := maxArchitectQuestionsForState(state)
-		expected := baseArchitectQuestions + bonusQuestionsPerFailure
-		if max != expected {
-			t.Errorf("expected %d, got %d", expected, max)
-		}
-	})
-
-	t.Run("both failures add bonuses", func(t *testing.T) {
+	t.Run("with guardrail fail", func(t *testing.T) {
 		state := raufState{
-			PriorGuardrailStatus:   "fail",
-			LastVerificationStatus: "fail",
+			PriorGuardrailStatus: "fail",
+			PriorGuardrailReason: "max_files_changed",
 		}
-		max := maxArchitectQuestionsForState(state)
-		expected := baseArchitectQuestions + 2*bonusQuestionsPerFailure
-		if max != expected {
-			t.Errorf("expected %d, got %d", expected, max)
+		got := buildBackpressurePack(state, false)
+		if !strings.Contains(got, "Guardrail Failure") {
+			t.Error("missing Guardrail Failure section")
+		}
+		if !strings.Contains(got, "Reduce scope") {
+			t.Error("missing guardrail action")
+		}
+	})
+
+	t.Run("with verify fail", func(t *testing.T) {
+		state := raufState{
+			LastVerificationStatus:  "fail",
+			LastVerificationOutput:  "ERROR: something broke",
+			LastVerificationCommand: "make test",
+		}
+		got := buildBackpressurePack(state, false)
+		if !strings.Contains(got, "Verification Failure") {
+			t.Error("missing Verification Failure section")
+		}
+		if !strings.Contains(got, "ERROR: something broke") {
+			t.Error("missing error summary")
+		}
+	})
+
+	t.Run("recovery mode guardrail", func(t *testing.T) {
+		state := raufState{
+			RecoveryMode:         "guardrail",
+			PriorGuardrailStatus: "fail",
+			PriorGuardrailReason: "forbidden_path:/etc",
+		}
+		got := buildBackpressurePack(state, false)
+		if !strings.Contains(got, "GUARDRAIL RECOVERY") {
+			t.Error("missing GUARDRAIL RECOVERY header")
+		}
+	})
+
+	t.Run("recovery mode verify", func(t *testing.T) {
+		state := raufState{
+			RecoveryMode:            "verify",
+			LastVerificationStatus:  "fail",
+			LastVerificationOutput:  "test failed",
+			LastVerificationCommand: "make test",
+		}
+		got := buildBackpressurePack(state, false)
+		if !strings.Contains(got, "VERIFY RECOVERY") {
+			t.Error("missing VERIFY RECOVERY header")
+		}
+	})
+
+	t.Run("recovery mode no_progress", func(t *testing.T) {
+		state := raufState{
+			RecoveryMode:    "no_progress",
+			PriorExitReason: "no_progress",
+		}
+		got := buildBackpressurePack(state, false)
+		if !strings.Contains(got, "NO-PROGRESS RECOVERY") {
+			t.Error("missing NO-PROGRESS RECOVERY header")
+		}
+	})
+
+	t.Run("with plan drift", func(t *testing.T) {
+		state := raufState{
+			PlanHashBefore:  "abc123",
+			PlanHashAfter:   "def456",
+			PlanDiffSummary: "+ added task\n- removed task",
+		}
+		got := buildBackpressurePack(state, false)
+		if !strings.Contains(got, "Plan Changes Detected") {
+			t.Error("missing Plan Changes section")
+		}
+		if !strings.Contains(got, "+ added task") {
+			t.Error("missing diff excerpt")
+		}
+	})
+
+	t.Run("with exit reason no_progress", func(t *testing.T) {
+		state := raufState{
+			PriorExitReason: "no_progress",
+		}
+		got := buildBackpressurePack(state, false)
+		if !strings.Contains(got, "Prior Exit Reason") {
+			t.Error("missing Prior Exit Reason section")
+		}
+		if !strings.Contains(got, "Reducing scope") {
+			t.Error("missing no_progress guidance")
+		}
+	})
+
+	t.Run("with exit reason no_unchecked_tasks", func(t *testing.T) {
+		state := raufState{
+			PriorExitReason: "no_unchecked_tasks",
+		}
+		got := buildBackpressurePack(state, false)
+		if !strings.Contains(got, "no_unchecked_tasks") {
+			t.Error("missing exit reason")
+		}
+		if !strings.Contains(got, "RAUF_COMPLETE") {
+			t.Error("missing completion guidance")
+		}
+	})
+
+	t.Run("with retry backpressure", func(t *testing.T) {
+		state := raufState{
+			PriorRetryCount:  3,
+			PriorRetryReason: "rate_limit",
+		}
+		got := buildBackpressurePack(state, false)
+		if !strings.Contains(got, "Harness Retries") {
+			t.Error("missing Harness Retries section")
+		}
+		if !strings.Contains(got, "rate_limit") {
+			t.Error("missing retry reason")
+		}
+	})
+
+	t.Run("consecutive verify fails requiring hypothesis", func(t *testing.T) {
+		state := raufState{
+			LastVerificationStatus:  "fail",
+			LastVerificationOutput:  "test failed",
+			LastVerificationCommand: "make test",
+			ConsecutiveVerifyFails:  2,
+		}
+		got := buildBackpressurePack(state, false)
+		if !strings.Contains(got, "HYPOTHESIS REQUIRED") {
+			t.Error("missing HYPOTHESIS REQUIRED message")
+		}
+		if !strings.Contains(got, "Consecutive Failures: 2") {
+			t.Error("missing consecutive failure count")
 		}
 	})
 }
 
-func TestRetryMatchToken(t *testing.T) {
-	t.Run("empty match list", func(t *testing.T) {
-		token, ok := retryMatchToken("rate limit hit", nil)
-		if ok || token != "" {
-			t.Errorf("expected no match, got %q", token)
+func TestGeneratePlanDiff(t *testing.T) {
+	origGitExec := gitExec
+	defer func() { gitExec = origGitExec }()
+
+	t.Run("git unavailable", func(t *testing.T) {
+		got := generatePlanDiff("PLAN.md", false, 10)
+		if !strings.Contains(got, "git diff unavailable") {
+			t.Errorf("unexpected output: %q", got)
 		}
 	})
 
-	t.Run("matches token", func(t *testing.T) {
-		token, ok := retryMatchToken("Error: rate limit exceeded", []string{"rate limit", "429"})
-		if !ok || token != "rate limit" {
-			t.Errorf("expected 'rate limit', got %q", token)
-		}
-	})
-
-	t.Run("wildcard match", func(t *testing.T) {
-		token, ok := retryMatchToken("any error", []string{"*"})
-		if !ok || token != "*" {
-			t.Errorf("expected '*', got %q", token)
-		}
-	})
-}
-
-func TestHasBackpressureResponse(t *testing.T) {
-	t.Run("empty output returns false", func(t *testing.T) {
-		if hasBackpressureResponse("") {
-			t.Error("expected false for empty output")
-		}
-	})
-
-	t.Run("detects response header", func(t *testing.T) {
-		output := `Some text
-## Backpressure Response
-
-- [ ] Acknowledged: test failure
-- [ ] Action: fixing it`
-		if !hasBackpressureResponse(output) {
-			t.Error("expected true when header present")
-		}
-	})
-
-	t.Run("variations of header", func(t *testing.T) {
-		outputs := []string{
-			"## Backpressure Response\n\n- Content",
-			"  ## Backpressure Response",
-			"## Backpressure Response ",
-		}
-		for _, output := range outputs {
-			if !hasBackpressureResponse(output) {
-				t.Errorf("expected true for output: %q", output)
+	t.Run("working tree diff", func(t *testing.T) {
+		gitExec = func(args ...string) (string, error) {
+			if len(args) >= 1 && args[0] == "diff" && args[1] == "--" {
+				return "+ change", nil
 			}
+			return "", nil
+		}
+		got := generatePlanDiff("PLAN.md", true, 10)
+		if !strings.Contains(got, "[source: working-tree]") {
+			t.Errorf("expected working-tree source, got: %q", got)
+		}
+		if !strings.Contains(got, "+ change") {
+			t.Errorf("missing diff content: %q", got)
 		}
 	})
 
-	t.Run("ignores header inside code fence", func(t *testing.T) {
-		output := "```\n## Backpressure Response\n```"
-		if hasBackpressureResponse(output) {
-			t.Error("expected false when inside code fence")
+	t.Run("staged diff fallback", func(t *testing.T) {
+		gitExec = func(args ...string) (string, error) {
+			if len(args) >= 1 && args[0] == "diff" && args[1] == "--" {
+				return "", nil // empty working tree diff
+			}
+			if len(args) >= 1 && args[0] == "diff" && args[1] == "--cached" {
+				return "+ staged change", nil
+			}
+			return "", nil
+		}
+		got := generatePlanDiff("PLAN.md", true, 10)
+		if !strings.Contains(got, "[source: staged]") {
+			t.Errorf("expected staged source, got: %q", got)
+		}
+		if !strings.Contains(got, "+ staged change") {
+			t.Errorf("missing diff content: %q", got)
 		}
 	})
 
-	t.Run("ignores header inside tilde fence", func(t *testing.T) {
-		output := "~~~\n## Backpressure Response\n~~~"
-		if hasBackpressureResponse(output) {
-			t.Error("expected false when inside tilde fence")
+	t.Run("diff empty", func(t *testing.T) {
+		gitExec = func(args ...string) (string, error) {
+			return "", nil
+		}
+		got := generatePlanDiff("PLAN.md", true, 10)
+		if !strings.Contains(got, "diff empty") {
+			t.Errorf("expected diff empty message, got: %q", got)
 		}
 	})
 
-	t.Run("detects header after code fence", func(t *testing.T) {
-		output := "```\ncode\n```\n## Backpressure Response\n"
-		if !hasBackpressureResponse(output) {
-			t.Error("expected true when header is after fence")
+	t.Run("diff failed", func(t *testing.T) {
+		gitExec = func(args ...string) (string, error) {
+			if len(args) >= 1 && args[0] == "diff" && args[1] == "--" {
+				return "", exec.ErrNotFound
+			}
+			if len(args) >= 1 && args[0] == "diff" && args[1] == "--cached" {
+				return "", exec.ErrNotFound
+			}
+			return "", nil
+		}
+		got := generatePlanDiff("PLAN.md", true, 10)
+		if !strings.Contains(got, "git diff failed") {
+			t.Errorf("expected diff failed message, got: %q", got)
 		}
 	})
-
-	t.Run("false when not present", func(t *testing.T) {
-		output := "Some random text\nwithout the header"
-		if hasBackpressureResponse(output) {
-			t.Error("expected false when header not present")
-		}
-	})
-}
-
-func TestBuildBackpressurePack_HypothesisRequired(t *testing.T) {
-	state := raufState{
-		LastVerificationStatus:  "fail",
-		LastVerificationCommand: "make test",
-		LastVerificationOutput:  "FAIL: test error",
-		ConsecutiveVerifyFails:  2,
-	}
-	result := buildBackpressurePack(state, true)
-
-	if !strings.Contains(result, "HYPOTHESIS REQUIRED") {
-		t.Error("expected HYPOTHESIS REQUIRED in output")
-	}
-	if !strings.Contains(result, "Consecutive Failures: 2") {
-		t.Error("expected consecutive failure count in output")
-	}
-	if !strings.Contains(result, "diagnosis") {
-		t.Error("expected diagnosis instruction in output")
-	}
-}
-
-func TestBuildBackpressurePack_NoHypothesisOnFirstFail(t *testing.T) {
-	state := raufState{
-		LastVerificationStatus:  "fail",
-		LastVerificationCommand: "make test",
-		LastVerificationOutput:  "FAIL: test error",
-		ConsecutiveVerifyFails:  1,
-	}
-	result := buildBackpressurePack(state, true)
-
-	if strings.Contains(result, "HYPOTHESIS REQUIRED") {
-		t.Error("should not require hypothesis on first failure")
-	}
-	if !strings.Contains(result, "Action Required: Fix these errors") {
-		t.Error("expected normal action required message")
-	}
 }

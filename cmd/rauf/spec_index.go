@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,6 +37,8 @@ func readSpecStatus(path string) string {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 0, 1024*1024)
+	scanner.Buffer(buf, 1024*1024)
 	inFrontmatter := false
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -52,6 +55,9 @@ func readSpecStatus(path string) string {
 		if strings.HasPrefix(line, "status:") {
 			return strings.TrimSpace(strings.TrimPrefix(line, "status:"))
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: error reading spec file %s: %v\n", path, err)
 	}
 	return ""
 }

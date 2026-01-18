@@ -22,6 +22,14 @@ type logEntry struct {
 	CompletionSignal    string   `json:"completion_signal,omitempty"`
 	CompletionSpecs     []string `json:"completion_specs,omitempty"`
 	CompletionArtifacts []string `json:"completion_artifacts,omitempty"`
+	// Model escalation
+	Model            string `json:"model,omitempty"`
+	Escalated        bool   `json:"escalated,omitempty"`
+	EscalationReason string `json:"escalation_reason,omitempty"`
+	FromModel        string `json:"from,omitempty"`
+	ToModel          string `json:"to,omitempty"`
+	Cooldown         int    `json:"cooldown,omitempty"`
+	EscalationCount  int    `json:"escalation_count,omitempty"`
 }
 
 func writeLogEntry(file *os.File, entry logEntry) {

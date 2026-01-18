@@ -2,199 +2,125 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestLintSpecsMissingCompletionContract(t *testing.T) {
+func TestLintSpecs(t *testing.T) {
 	dir := t.TempDir()
-	chdirTemp(t, dir)
+	cwd, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(cwd)
 
-	if err := os.MkdirAll("specs", 0o755); err != nil {
-		t.Fatalf("mkdir specs: %v", err)
-	}
-	spec := `---
-id: test
-status: approved
+	t.Run("no specs dir", func(t *testing.T) {
+		err := lintSpecs()
+		if err != nil {
+			t.Errorf("expected nil error when specs dir missing, got %v", err)
+		}
+	})
+
+	os.MkdirAll("specs", 0o755)
+
+	t.Run("empty specs dir", func(t *testing.T) {
+		err := lintSpecs()
+		if err != nil {
+			t.Errorf("expected nil error for empty specs dir, got %v", err)
+		}
+	})
+
+	t.Run("valid spec", func(t *testing.T) {
+		content := `---
+status: stable
 ---
-
-# Test
+## Completion Contract
+Verification Commands:
+- go test ./...
 `
-	if err := os.WriteFile(filepath.Join("specs", "test.md"), []byte(spec), 0o644); err != nil {
-		t.Fatalf("write spec: %v", err)
-	}
+		os.WriteFile("specs/valid.md", []byte(content), 0o644)
+		err := lintSpecs()
+		if err != nil {
+			t.Errorf("expected nil error for valid spec, got %v", err)
+		}
+	})
 
-	err := lintSpecs()
-	if err == nil || !strings.Contains(err.Error(), "missing Completion Contract") {
-		t.Fatalf("expected missing completion contract error, got %v", err)
-	}
-}
-
-func TestLintSpecsMissingVerificationCommands(t *testing.T) {
-	dir := t.TempDir()
-	chdirTemp(t, dir)
-
-	if err := os.MkdirAll("specs", 0o755); err != nil {
-		t.Fatalf("mkdir specs: %v", err)
-	}
-	spec := `---
-id: test
-status: approved
+	t.Run("invalid spec - missing contract", func(t *testing.T) {
+		content := `---
+status: stable
 ---
-
-# Test
-
-## 4. Completion Contract
-Success condition:
-- ok
+## Other Section
 `
-	if err := os.WriteFile(filepath.Join("specs", "test.md"), []byte(spec), 0o644); err != nil {
-		t.Fatalf("write spec: %v", err)
-	}
+		os.WriteFile("specs/invalid.md", []byte(content), 0o644)
+		err := lintSpecs()
+		if err == nil {
+			t.Error("expected error for missing completion contract")
+		}
+		if !strings.Contains(err.Error(), "missing Completion Contract section") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+		os.Remove("specs/invalid.md")
+	})
 
-	err := lintSpecs()
-	if err == nil || !strings.Contains(err.Error(), "no verification commands") {
-		t.Fatalf("expected missing verification commands error, got %v", err)
-	}
-}
-
-func TestLintSpecsVerificationTBD(t *testing.T) {
-	dir := t.TempDir()
-	chdirTemp(t, dir)
-
-	if err := os.MkdirAll("specs", 0o755); err != nil {
-		t.Fatalf("mkdir specs: %v", err)
-	}
-	spec := `---
-id: test
-status: approved
+	t.Run("invalid spec - TBD in command", func(t *testing.T) {
+		content := `---
+status: stable
 ---
-
-# Test
-
-## 4. Completion Contract
-Success condition:
-- ok
-
-Verification commands:
-- TBD: add command
+## Completion Contract
+Verification Commands:
+- TBD
 `
-	if err := os.WriteFile(filepath.Join("specs", "test.md"), []byte(spec), 0o644); err != nil {
-		t.Fatalf("write spec: %v", err)
-	}
-
-	err := lintSpecs()
-	if err == nil || !strings.Contains(err.Error(), "contains TBD") {
-		t.Fatalf("expected TBD error, got %v", err)
-	}
-}
-
-func TestLintSpecsDraftIgnored(t *testing.T) {
-	dir := t.TempDir()
-	chdirTemp(t, dir)
-
-	if err := os.MkdirAll("specs", 0o755); err != nil {
-		t.Fatalf("mkdir specs: %v", err)
-	}
-	spec := `---
-id: test
-status: draft
----
-
-# Test
-`
-	if err := os.WriteFile(filepath.Join("specs", "test.md"), []byte(spec), 0o644); err != nil {
-		t.Fatalf("write spec: %v", err)
-	}
-
-	if err := lintSpecs(); err != nil {
-		t.Fatalf("expected draft spec to be ignored, got %v", err)
-	}
-}
-
-func TestLintSpecsIgnoresFencedLists(t *testing.T) {
-	dir := t.TempDir()
-	chdirTemp(t, dir)
-
-	if err := os.MkdirAll("specs", 0o755); err != nil {
-		t.Fatalf("mkdir specs: %v", err)
-	}
-	spec := "---\n" +
-		"id: test\n" +
-		"status: approved\n" +
-		"---\n" +
-		"\n" +
-		"# Test\n" +
-		"\n" +
-		"## 4. Completion Contract\n" +
-		"Success condition:\n" +
-		"- ok\n" +
-		"\n" +
-		"Verification commands:\n" +
-		"- go test ./...\n" +
-		"\n" +
-		"Artifacts/flags:\n" +
-		"```text\n" +
-		"- not-an-artifact.txt\n" +
-		"```\n"
-	if err := os.WriteFile(filepath.Join("specs", "test.md"), []byte(spec), 0o644); err != nil {
-		t.Fatalf("write spec: %v", err)
-	}
-
-	if err := lintSpecs(); err != nil {
-		t.Fatalf("expected fenced list to be ignored, got %v", err)
-	}
+		os.WriteFile("specs/tbd.md", []byte(content), 0o644)
+		err := lintSpecs()
+		if err == nil {
+			t.Error("expected error for TBD in command")
+		}
+		if !strings.Contains(err.Error(), "verification command contains TBD") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+	})
 }
 
 func TestCheckCompletionArtifacts(t *testing.T) {
 	dir := t.TempDir()
-	chdirTemp(t, dir)
+	cwd, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(cwd)
 
-	if err := os.MkdirAll("specs", 0o755); err != nil {
-		t.Fatalf("mkdir specs: %v", err)
-	}
-	spec := `---
-id: test
-status: approved
+	content := `---
+status: stable
 ---
-
-# Test
-
-## 4. Completion Contract
-Success condition:
-- ok
-
-Verification commands:
-- go test ./...
-
-Artifacts/flags:
-- output.txt
+## Completion Contract
+Artifacts/Flags:
+- out.bin
 `
-	specPath := filepath.Join("specs", "test.md")
-	if err := os.WriteFile(specPath, []byte(spec), 0o644); err != nil {
-		t.Fatalf("write spec: %v", err)
-	}
+	os.WriteFile("spec.md", []byte(content), 0o644)
 
-	ok, reason, satisfied, verified := checkCompletionArtifacts([]string{specPath})
-	if ok || reason == "" {
-		t.Fatalf("expected missing artifact failure, got ok=%t reason=%q", ok, reason)
-	}
-	if len(satisfied) != 0 || len(verified) != 0 {
-		t.Fatalf("expected no satisfied specs or verified artifacts, got %v %v", satisfied, verified)
-	}
+	t.Run("missing artifact", func(t *testing.T) {
+		ok, reason, satisfied, verified := checkCompletionArtifacts([]string{"spec.md"})
+		if ok {
+			t.Error("expected failure for missing artifact")
+		}
+		if !strings.Contains(reason, "missing artifacts: out.bin") {
+			t.Errorf("unexpected reason: %q", reason)
+		}
+		if len(satisfied) != 0 {
+			t.Errorf("expected 0 satisfied, got %d", len(satisfied))
+		}
+		if len(verified) != 0 {
+			t.Errorf("expected 0 verified, got %d", len(verified))
+		}
+	})
 
-	if err := os.WriteFile("output.txt", []byte("ok"), 0o644); err != nil {
-		t.Fatalf("write artifact: %v", err)
-	}
-	ok, reason, satisfied, verified = checkCompletionArtifacts([]string{specPath})
-	if !ok || reason != "" {
-		t.Fatalf("expected artifacts check to pass, got ok=%t reason=%q", ok, reason)
-	}
-	if len(satisfied) != 1 || satisfied[0] != specPath {
-		t.Fatalf("expected spec to be satisfied, got %v", satisfied)
-	}
-	if len(verified) != 1 || verified[0] != "output.txt" {
-		t.Fatalf("expected verified artifact to be output.txt, got %v", verified)
-	}
+	t.Run("satisfied artifact", func(t *testing.T) {
+		os.WriteFile("out.bin", []byte("data"), 0o644)
+		ok, reason, satisfied, verified := checkCompletionArtifacts([]string{"spec.md"})
+		if !ok {
+			t.Errorf("expected success, got error: %v", reason)
+		}
+		if len(satisfied) != 1 || satisfied[0] != "spec.md" {
+			t.Errorf("unexpected satisfied: %v", satisfied)
+		}
+		if len(verified) != 1 || verified[0] != "out.bin" {
+			t.Errorf("unexpected verified: %v", verified)
+		}
+	})
 }

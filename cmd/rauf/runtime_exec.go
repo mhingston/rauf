@@ -14,12 +14,17 @@ import (
 	"strings"
 )
 
+var execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, name, args...)
+}
+
 type runtimeExec struct {
 	Runtime         string
 	DockerImage     string
 	DockerArgs      []string
 	DockerContainer string
 	WorkDir         string
+	Quiet           bool
 }
 
 func (r runtimeExec) isDocker() bool {
@@ -33,7 +38,7 @@ func (r runtimeExec) isDockerPersist() bool {
 
 func (r runtimeExec) command(ctx context.Context, name string, args ...string) (*exec.Cmd, error) {
 	if !r.isDocker() && !r.isDockerPersist() {
-		return exec.CommandContext(ctx, name, args...), nil
+		return execCommand(ctx, name, args...), nil
 	}
 	if r.DockerImage == "" {
 		return nil, errors.New("docker runtime requires docker_image")
@@ -49,7 +54,7 @@ func (r runtimeExec) command(ctx context.Context, name string, args ...string) (
 }
 
 func (r runtimeExec) runShell(ctx context.Context, command string, stdout, stderr io.Writer) (string, error) {
-	buffer := &limitedBuffer{max: 16 * 1024}
+	buffer := &limitedBuffer{max: 1024 * 1024}
 	name, args := r.shellArgs(command)
 	cmd, err := r.command(ctx, name, args...)
 	if err != nil {
@@ -58,7 +63,8 @@ func (r runtimeExec) runShell(ctx context.Context, command string, stdout, stder
 	cmd.Stdout = io.MultiWriter(stdout, buffer)
 	cmd.Stderr = io.MultiWriter(stderr, buffer)
 	cmd.Env = os.Environ()
-	return buffer.String(), cmd.Run()
+	err = cmd.Run()
+	return buffer.String(), err
 }
 
 func (r runtimeExec) shellArgs(command string) (string, []string) {
@@ -99,7 +105,7 @@ func (r runtimeExec) commandDockerRun(ctx context.Context, workdir string, name 
 	}
 	dockerArgs = append(dockerArgs, r.DockerImage, name)
 	dockerArgs = append(dockerArgs, args...)
-	return exec.CommandContext(ctx, "docker", dockerArgs...), nil
+	return execCommand(ctx, "docker", dockerArgs...), nil
 }
 
 func (r runtimeExec) commandDockerPersist(ctx context.Context, workdir string, name string, args ...string) (*exec.Cmd, error) {
@@ -113,7 +119,7 @@ func (r runtimeExec) commandDockerPersist(ctx context.Context, workdir string, n
 	}
 	dockerArgs = append(dockerArgs, container, name)
 	dockerArgs = append(dockerArgs, args...)
-	return exec.CommandContext(ctx, "docker", dockerArgs...), nil
+	return execCommand(ctx, "docker", dockerArgs...), nil
 }
 
 func (r runtimeExec) dockerContainerName(workdir string) string {
@@ -132,67 +138,58 @@ func (r runtimeExec) dockerContainerName(workdir string) string {
 }
 
 func (r runtimeExec) ensureDockerContainer(ctx context.Context, name, workdir string) error {
-	if r.DockerImage == "" {
-		return errors.New("docker runtime requires docker_image")
+	name = r.DockerContainer
+	if name == "" {
+		return errors.New("docker_persist runtime requires docker_container")
 	}
-	running, exists, err := r.dockerContainerState(ctx, name)
+
+	state, err := r.dockerContainerState(ctx, name)
 	if err != nil {
 		return err
 	}
-	if exists && running {
+	if state == "running" {
 		return nil
 	}
-	if exists && !running {
-		cmd := exec.CommandContext(ctx, "docker", "start", name)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Env = os.Environ()
-		return cmd.Run()
+	if state == "exited" {
+		// Restart it
+		cmd := execCommand(ctx, "docker", "start", name)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to restart container %s: %w", name, err)
+		}
+		return nil
 	}
 
+	// Create it
 	dockerArgs := []string{"run", "-d", "--name", name}
 	if uid, gid := hostUIDGID(); uid >= 0 && gid >= 0 {
 		dockerArgs = append(dockerArgs, "-u", fmt.Sprintf("%d:%d", uid, gid))
 	}
-	// Format volume mount path appropriately for the platform
 	volumeMount := formatDockerVolume(workdir, "/workspace")
 	dockerArgs = append(dockerArgs, "-v", volumeMount, "-w", "/workspace")
 	if len(r.DockerArgs) > 0 {
-		if err := validateDockerArgs(r.DockerArgs); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
-		}
 		dockerArgs = append(dockerArgs, r.DockerArgs...)
 	}
-	dockerArgs = append(dockerArgs, r.DockerImage, "sh", "-c", "tail -f /dev/null")
-	cmd := exec.CommandContext(ctx, "docker", dockerArgs...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
-	return cmd.Run()
+	dockerArgs = append(dockerArgs, r.DockerImage, "sleep", "infinity")
+	cmd := execCommand(ctx, "docker", dockerArgs...)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to start container %s: %w", name, err)
+	}
+	return nil
 }
 
-func (r runtimeExec) dockerContainerState(ctx context.Context, name string) (running bool, exists bool, err error) {
-	cmd := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}}", name)
+func (r runtimeExec) dockerContainerState(ctx context.Context, name string) (string, error) {
+	cmd := execCommand(ctx, "docker", "inspect", "-f", "{{.State.Status}}", name)
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &stderrBuf
-	output, cmdErr := cmd.Output()
-	if cmdErr != nil {
-		// Check if the error is because the container doesn't exist
+	output, err := cmd.Output()
+	if err != nil {
 		stderr := stderrBuf.String()
 		if strings.Contains(stderr, "No such object") || strings.Contains(stderr, "not found") {
-			return false, false, nil
+			return "none", nil
 		}
-		if exitErr, ok := cmdErr.(*exec.ExitError); ok {
-			// Exit code 1 with no matching stderr message - container doesn't exist
-			if exitErr.ExitCode() == 1 && stderr == "" {
-				return false, false, nil
-			}
-		}
-		// Some other error (Docker daemon down, permissions, etc.)
-		return false, false, fmt.Errorf("docker inspect failed: %w", cmdErr)
+		return "", fmt.Errorf("docker inspect failed: %w", err)
 	}
-	value := strings.TrimSpace(string(output))
-	return value == "true", true, nil
+	return strings.TrimSpace(string(output)), nil
 }
 
 // validateDockerArgs checks for potentially dangerous Docker arguments

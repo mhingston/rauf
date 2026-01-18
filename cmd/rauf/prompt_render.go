@@ -109,6 +109,19 @@ func buildContextPack(planPath string, task planTask, verifyCmds []string, state
 	}
 	b.WriteString("\n")
 
+	// Recovery Mode Hint
+	if state.RecoveryMode != "" {
+		msg := "previous attempts failed."
+		if state.RecoveryMode == "verify" {
+			msg = "previous attempts failed verification."
+		} else if state.RecoveryMode == "guardrail" {
+			msg = "previous attempts blocked by guardrails."
+		} else if state.RecoveryMode == "no_progress" {
+			msg = "previous attempts made no progress."
+		}
+		b.WriteString(fmt.Sprintf("SYSTEM: Recovery mode: %s — %s A hypothesis and different action are required.\n\n", state.RecoveryMode, msg))
+	}
+
 	if verifyInstruction != "" {
 		b.WriteString("SYSTEM: ")
 		b.WriteString(verifyInstruction)
@@ -125,6 +138,36 @@ func buildContextPack(planPath string, task planTask, verifyCmds []string, state
 		b.WriteString("Output (truncated):\n\n```")
 		b.WriteString(state.LastVerificationOutput)
 		b.WriteString("\n```\n\n")
+	}
+
+	// Active Assumptions
+	if len(state.Assumptions) > 0 {
+		b.WriteString("### Active Assumptions\n\n")
+		for _, a := range state.Assumptions {
+			prefix := ""
+			if a.StickyScope != "" {
+				prefix = fmt.Sprintf("[%s] ", strings.ToUpper(a.StickyScope))
+			}
+			b.WriteString(fmt.Sprintf("- %s%s\n", prefix, a.Question))
+		}
+		b.WriteString("\n")
+	}
+
+	// Resurfaced Assumptions (only if in relevant recovery mode)
+	if state.RecoveryMode != "" {
+		var relevant []ArchivedAssumption
+		for _, a := range state.ArchivedAssumptions {
+			if a.ClearedRecoveryMode == state.RecoveryMode {
+				relevant = append(relevant, a)
+			}
+		}
+		if len(relevant) > 0 {
+			b.WriteString("### Previously Resolved Assumptions (Resurfaced)\n\n")
+			for _, a := range relevant {
+				b.WriteString(fmt.Sprintf("- %s (Resolved: %s)\n", a.Question, a.ClearedReason))
+			}
+			b.WriteString("\n")
+		}
 	}
 
 	specs := readSpecContexts(task.SpecRefs, maxSpecBytes)
@@ -264,10 +307,27 @@ func readContextFile(path string, maxBytes int) string {
 	return truncateHead(strings.TrimSpace(string(data)), maxBytes)
 }
 
-func searchRelevantFiles(task planTask) []string {
+var rgSearch = func(ctx context.Context, term string) ([]string, error) {
 	if _, err := exec.LookPath("rg"); err != nil {
-		return nil
+		return nil, err
 	}
+	args := []string{"-l", "-F", "-i", "--max-count", "1", term}
+	cmd := exec.CommandContext(ctx, "rg", args...)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	var results []string
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			results = append(results, line)
+		}
+	}
+	return results, nil
+}
+
+func searchRelevantFiles(task planTask) []string {
 	terms := extractSearchTerms(task)
 	if len(terms) == 0 {
 		return nil
@@ -281,18 +341,12 @@ func searchRelevantFiles(task planTask) []string {
 		}
 		// Use a timeout to prevent hanging on large repos or pathological inputs
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		args := []string{"-l", "-F", "-i", "--max-count", "1", term}
-		cmd := exec.CommandContext(ctx, "rg", args...)
-		output, err := cmd.Output()
+		output, err := rgSearch(ctx, term)
 		cancel()
 		if err != nil {
 			continue
 		}
-		for _, line := range strings.Split(string(output), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
+		for _, line := range output {
 			if _, ok := seen[line]; ok {
 				continue
 			}

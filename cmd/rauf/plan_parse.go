@@ -37,7 +37,10 @@ func readActiveTask(planPath string) (planTask, bool, error) {
 	collecting := false
 	inVerifyBlock := false
 
+	skipFirstCodeBlock := false
 	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 0, 1024*1024)
+	scanner.Buffer(buf, 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 		// Skip task line matching while inside a code block to avoid
@@ -61,6 +64,10 @@ func readActiveTask(planPath string) (planTask, bool, error) {
 		if inVerifyBlock {
 			trimmed := strings.TrimSpace(line)
 			if strings.HasPrefix(trimmed, "```") {
+				if skipFirstCodeBlock {
+					skipFirstCodeBlock = false
+					continue
+				}
 				inVerifyBlock = false
 				continue
 			}
@@ -80,8 +87,12 @@ func readActiveTask(planPath string) (planTask, bool, error) {
 			// Check for code block BEFORE stripping backticks
 			if raw == "" || strings.HasPrefix(raw, "```") {
 				inVerifyBlock = true
+				if raw == "" {
+					skipFirstCodeBlock = true
+				}
 				continue
 			}
+
 			// Now strip inline backticks for single-line verify commands
 			raw = strings.Trim(raw, "`")
 			if raw == "" {

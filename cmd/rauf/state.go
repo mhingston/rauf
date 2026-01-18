@@ -25,6 +25,36 @@ type raufState struct {
 	PriorRetryReason        string `json:"prior_retry_reason"`
 	ConsecutiveVerifyFails  int    `json:"consecutive_verify_fails"`
 	BackpressureInjected    bool   `json:"backpressure_injected"`
+	// Model escalation state
+	CurrentModel                 string `json:"current_model,omitempty"`
+	EscalationCount              int    `json:"escalation_count,omitempty"`
+	MinStrongIterationsRemaining int    `json:"min_strong_iterations_remaining,omitempty"`
+	ConsecutiveGuardrailFails    int    `json:"consecutive_guardrail_fails,omitempty"`
+	NoProgressStreak             int    `json:"no_progress_streak,omitempty"`
+	LastEscalationReason         string `json:"last_escalation_reason,omitempty"`
+	RecoveryMode                 string `json:"recovery_mode,omitempty"`
+	// Hypothesis tracking
+	Hypotheses []Hypothesis `json:"hypotheses,omitempty"`
+	// Assumption tracking
+	Assumptions         []Assumption         `json:"assumptions,omitempty"`
+	ArchivedAssumptions []ArchivedAssumption `json:"archived_assumptions,omitempty"`
+}
+
+type Assumption struct {
+	Question            string `json:"question"`
+	Type                string `json:"type"` // e.g. "ASSUMPTION"
+	CreatedIteration    int    `json:"created_iteration"`
+	CreatedRecoveryMode string `json:"created_recovery_mode"`
+	StickyScope         string `json:"sticky_scope"` // "sticky", "global", or empty
+}
+
+type ArchivedAssumption struct {
+	Assumption
+	ClearedReason       string    `json:"cleared_reason"`
+	ClearedIteration    int       `json:"cleared_iteration"`
+	ClearedRecoveryMode string    `json:"cleared_recovery_mode"`
+	RelatedVerifyHash   string    `json:"related_verify_hash,omitempty"`
+	ArchivedAt          time.Time `json:"archived_at"`
 }
 
 func loadState() raufState {
@@ -95,11 +125,11 @@ func saveState(state raufState) error {
 	return nil
 }
 
-func statePath() string {
+var statePath = func() string {
 	return filepath.Join(".rauf", "state.json")
 }
 
-func stateSummaryPath() string {
+var stateSummaryPath = func() string {
 	return filepath.Join(".rauf", "state.md")
 }
 
@@ -128,6 +158,37 @@ func writeStateSummary(state raufState) error {
 		b.WriteString("\nLast verification output (truncated):\n\n```text\n")
 		b.WriteString(truncateStateSummary(state.LastVerificationOutput))
 		b.WriteString("\n```\n")
+	}
+
+	// Model escalation status
+	if state.CurrentModel != "" || state.EscalationCount > 0 {
+		b.WriteString("\n## Model Escalation\n\n")
+		b.WriteString("Current model: ")
+		if state.CurrentModel == "" {
+			b.WriteString("default")
+		} else {
+			b.WriteString(state.CurrentModel)
+		}
+		b.WriteString("\n")
+		if state.EscalationCount > 0 {
+			b.WriteString(fmt.Sprintf("Escalations: %d\n", state.EscalationCount))
+		}
+		if state.MinStrongIterationsRemaining > 0 {
+			b.WriteString(fmt.Sprintf("Min strong iterations remaining: %d\n", state.MinStrongIterationsRemaining))
+		}
+		if state.LastEscalationReason != "" {
+			b.WriteString("Last escalation reason: ")
+			b.WriteString(state.LastEscalationReason)
+			b.WriteString("\n")
+		}
+	}
+
+	// Recovery mode status
+	if state.RecoveryMode != "" {
+		b.WriteString("\n## Recovery Mode\n\n")
+		b.WriteString("Mode: ")
+		b.WriteString(state.RecoveryMode)
+		b.WriteString("\n")
 	}
 
 	// Use atomic write pattern for consistency
@@ -171,4 +232,48 @@ func truncateStateSummary(value string) string {
 		truncated = truncated[:len(truncated)-1]
 	}
 	return truncated
+}
+
+// addAssumption adds a new assumption to the state.
+func addAssumption(state raufState, q string, stickyScope string, iteration int, recoveryMode string) raufState {
+	// Check for duplicates
+	for _, a := range state.Assumptions {
+		if a.Question == q {
+			// Update stickiness if re-assumed as sticky?
+			// If duplicate, and new one is sticky while old isn't, maybe upgrade?
+			// For now, simple duplicate check.
+			return state
+		}
+	}
+	state.Assumptions = append(state.Assumptions, Assumption{
+		Question:            q,
+		Type:                "ASSUMPTION",
+		CreatedIteration:    iteration,
+		CreatedRecoveryMode: recoveryMode,
+		StickyScope:         stickyScope,
+	})
+	return state
+}
+
+// archiveAssumptions moves non-sticky assumptions matching the mode to the archive.
+func archiveAssumptions(state raufState, modeToClear string, reason string, iteration int, verifyHash string) raufState {
+	active := []Assumption{}
+	for _, a := range state.Assumptions {
+		shouldArchive := a.StickyScope == "" && a.CreatedRecoveryMode == modeToClear
+
+		if shouldArchive {
+			state.ArchivedAssumptions = append(state.ArchivedAssumptions, ArchivedAssumption{
+				Assumption:          a,
+				ClearedReason:       reason,
+				ClearedIteration:    iteration,
+				ClearedRecoveryMode: modeToClear,
+				RelatedVerifyHash:   verifyHash,
+				ArchivedAt:          time.Now(),
+			})
+		} else {
+			active = append(active, a)
+		}
+	}
+	state.Assumptions = active
+	return state
 }

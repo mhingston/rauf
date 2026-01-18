@@ -83,8 +83,11 @@ func gitBranchExists(name string) (bool, error) {
 	if err == nil {
 		return true, nil
 	}
-	// show-ref exits with code 1 when ref doesn't exist, which is expected
-	// For other errors (corrupted repo, permission issues), we should propagate
+	// show-ref exits with code 1 when ref doesn't exist, which is expected.
+	// We also check for "not found" to support easier mocking in tests.
+	if strings.Contains(err.Error(), "not found") {
+		return false, nil
+	}
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		if exitErr.ExitCode() == 1 {
 			return false, nil

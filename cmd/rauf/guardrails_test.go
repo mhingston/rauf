@@ -224,3 +224,223 @@ func TestParseStatusPathWithQuotes(t *testing.T) {
 		})
 	}
 }
+func TestEnforceVerificationGuardrails(t *testing.T) {
+	cfg := runtimeConfig{
+		RequireVerifyForPlanUpdate: true,
+		RequireVerifyOnChange:      true,
+	}
+
+	tests := []struct {
+		name            string
+		verifyStatus    string
+		planChanged     bool
+		worktreeChanged bool
+		expectedOk      bool
+		expectedReason  string
+	}{
+		{"plan update with verify pass", "pass", true, false, true, ""},
+		{"plan update without verify pass", "fail", true, false, false, "plan_update_without_verify"},
+		{"change with verify pass", "pass", false, true, true, ""},
+		{"change with verify skipped", "skipped", false, true, false, "verify_required_for_change"},
+		{"nothing changed", "skipped", false, false, true, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ok, reason := enforceVerificationGuardrails(cfg, tt.verifyStatus, tt.planChanged, tt.worktreeChanged)
+			if ok != tt.expectedOk || reason != tt.expectedReason {
+				t.Errorf("enforceVerificationGuardrails() = (%v, %q), want (%v, %q)", ok, reason, tt.expectedOk, tt.expectedReason)
+			}
+		})
+	}
+}
+
+func TestEnforceMissingVerifyNoGit(t *testing.T) {
+	tests := []struct {
+		name              string
+		planChanged       bool
+		fingerprintBefore string
+		fingerprintAfter  string
+		expectedOk        bool
+		expectedReason    string
+	}{
+		{"plan not updated", false, "a", "b", false, "missing_verify_plan_not_updated"},
+		{"plan updated only", true, "a", "a", true, ""},
+		{"plan and other changed", true, "a", "b", false, "missing_verify_non_plan_change"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ok, reason := enforceMissingVerifyNoGit(tt.planChanged, tt.fingerprintBefore, tt.fingerprintAfter)
+			if ok != tt.expectedOk || reason != tt.expectedReason {
+				t.Errorf("enforceMissingVerifyNoGit() = (%v, %q), want (%v, %q)", ok, reason, tt.expectedOk, tt.expectedReason)
+			}
+		})
+	}
+}
+
+func TestSplitLines(t *testing.T) {
+	result := splitLines("a\nb\nc")
+	if len(result) != 3 {
+		t.Errorf("expected 3 lines, got %d", len(result))
+	}
+	if result[0] != "a" || result[1] != "b" || result[2] != "c" {
+		t.Errorf("unexpected content: %v", result)
+	}
+}
+
+func TestEnforceGuardrailsCommitCount(t *testing.T) {
+	origGitExec := gitExec
+	defer func() { gitExec = origGitExec }()
+
+	t.Run("within limit", func(t *testing.T) {
+		gitExec = func(args ...string) (string, error) {
+			if len(args) >= 2 && args[0] == "rev-list" {
+				return "2", nil
+			}
+			return "", nil
+		}
+		ok, reason := enforceGuardrails(runtimeConfig{MaxCommits: 5}, "HEAD~5", "HEAD")
+		if !ok {
+			t.Errorf("expected pass, got reason=%s", reason)
+		}
+	})
+
+	t.Run("exceeds limit", func(t *testing.T) {
+		gitExec = func(args ...string) (string, error) {
+			if len(args) >= 2 && args[0] == "rev-list" {
+				return "10", nil
+			}
+			return "", nil
+		}
+		ok, reason := enforceGuardrails(runtimeConfig{MaxCommits: 5}, "HEAD~10", "HEAD")
+		if ok || reason != "max_commits_exceeded" {
+			t.Errorf("expected max_commits_exceeded, got ok=%t reason=%s", ok, reason)
+		}
+	})
+
+	t.Run("git error on commit count", func(t *testing.T) {
+		gitExec = func(args ...string) (string, error) {
+			if len(args) >= 2 && args[0] == "rev-list" {
+				return "", exec.ErrNotFound
+			}
+			return "", nil
+		}
+		ok, reason := enforceGuardrails(runtimeConfig{MaxCommits: 5}, "HEAD~5", "HEAD")
+		if ok || reason != "git_error_commit_count" {
+			t.Errorf("expected git_error_commit_count, got ok=%t reason=%s", ok, reason)
+		}
+	})
+}
+
+func TestEnforceGuardrailsGitErrorFilelist(t *testing.T) {
+	// Test git error on diff path (different heads)
+	origGitExec := gitExec
+	defer func() { gitExec = origGitExec }()
+
+	t.Run("git error on diff with max files guardrail", func(t *testing.T) {
+		gitExec = func(args ...string) (string, error) {
+			// Allow rev-list to pass, but fail on diff
+			if len(args) >= 1 && args[0] == "diff" {
+				return "", exec.ErrNotFound
+			}
+			return "", nil
+		}
+		// Different heads trigger diff path
+		ok, reason := enforceGuardrails(runtimeConfig{MaxFilesChanged: 5}, "abc", "def")
+		if ok || reason != "git_error_file_list" {
+			t.Errorf("expected git_error_file_list, got ok=%t reason=%s", ok, reason)
+		}
+	})
+
+	t.Run("git error on diff with forbidden paths guardrail", func(t *testing.T) {
+		gitExec = func(args ...string) (string, error) {
+			if len(args) >= 1 && args[0] == "diff" {
+				return "", exec.ErrNotFound
+			}
+			return "", nil
+		}
+		ok, reason := enforceGuardrails(runtimeConfig{ForbiddenPaths: []string{"secret"}}, "abc", "def")
+		if ok || reason != "git_error_file_list" {
+			t.Errorf("expected git_error_file_list, got ok=%t reason=%s", ok, reason)
+		}
+	})
+}
+
+func TestListChangedFiles(t *testing.T) {
+	origGitExec := gitExec
+	defer func() { gitExec = origGitExec }()
+
+	t.Run("diff mode with changes", func(t *testing.T) {
+		gitExec = func(args ...string) (string, error) {
+			if len(args) >= 2 && args[0] == "diff" && args[1] == "--name-only" {
+				return "file1.go\nfile2.go", nil
+			}
+			return "", nil
+		}
+		files, gitErr := listChangedFiles("HEAD~1", "HEAD")
+		if gitErr {
+			t.Error("unexpected git error")
+		}
+		if len(files) != 2 {
+			t.Errorf("expected 2 files, got %d", len(files))
+		}
+	})
+
+	t.Run("diff mode git error", func(t *testing.T) {
+		gitExec = func(args ...string) (string, error) {
+			return "", exec.ErrNotFound
+		}
+		_, gitErr := listChangedFiles("HEAD~1", "HEAD")
+		if !gitErr {
+			t.Error("expected git error")
+		}
+	})
+
+	t.Run("status mode integration", func(t *testing.T) {
+		// Restore real gitExec for integration test
+		gitExec = origGitExec
+
+		// Use real git repo for status mode testing
+		repoDir := t.TempDir()
+		head := initGitRepo(t, repoDir)
+		chdirTemp(t, repoDir)
+
+		// Create a modified file
+		if err := os.WriteFile(filepath.Join(repoDir, "newfile.txt"), []byte("test"), 0o644); err != nil {
+			t.Fatalf("write failed: %v", err)
+		}
+
+		// Same head means status mode
+		files, gitErr := listChangedFiles(head, head)
+		if gitErr {
+			t.Error("unexpected git error")
+		}
+		if len(files) != 1 {
+			t.Errorf("expected 1 file, got %d: %v", len(files), files)
+		}
+	})
+}
+
+func TestUnquoteGitPath_OctalSequence(t *testing.T) {
+	// \302\240 is non-breaking space (utf-8 bytes)
+	// \400 is invalid (> 255)
+
+	t.Run("valid octal", func(t *testing.T) {
+		input := "\"\\302\\240\""
+		expected := "\u00a0"
+		if got := unquoteGitPath(input); got != expected {
+			t.Errorf("got %q, want %q", got, expected)
+		}
+	})
+
+	t.Run("invalid octal", func(t *testing.T) {
+		input := "\"\\400\""
+		// Logic: if val > 255, it keeps the backslash and moves on.
+		// So it should result in "\\400"
+		expected := "\\400"
+		if got := unquoteGitPath(input); got != expected {
+			t.Errorf("got %q, want %q", got, expected)
+		}
+	})
+}

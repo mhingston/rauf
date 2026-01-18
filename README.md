@@ -266,6 +266,28 @@ When an iteration fails, rauf injects a **Backpressure Pack** into the next iter
 
 The agent should respond with a `## Backpressure Response` section. Missing acknowledgment counts against progress.
 
+### Hypothesis requirement
+
+After 2+ consecutive verify failures, the agent must provide:
+
+```
+HYPOTHESIS: Why the previous fix failed
+DIFFERENT_THIS_TIME: What will be done differently
+```
+
+These are captured and stored in `.rauf/state.json` for debugging.
+
+### Architect questions
+
+Agents can ask questions using `RAUF_QUESTION:`. Typed questions are supported:
+
+```
+RAUF_QUESTION:CLARIFY: Is this a breaking change?
+RAUF_QUESTION:DECISION: Should we use option A or B?
+RAUF_QUESTION:ASSUMPTION: I assume the API is versioned?
+RAUF_QUESTION: Plain question without type
+```
+
 ## Loop mechanics
 
 Each iteration is a fresh harness run. State carries across iterations only via files and git history.
@@ -360,7 +382,38 @@ strategy:
   - mode: build
     iterations: 5
     until: verify_pass
+
+# Model escalation (optional)
+model_default: ""          # Default model (e.g., "sonnet")
+model_strong: ""           # Stronger model for escalation (e.g., "opus")
+model_flag: "--model"      # Flag to pass model to harness
+model_escalation:
+  enabled: false
+  consecutive_verify_fails: 2  # Escalate after N verify failures
+  no_progress_iters: 2         # Escalate after N no-progress iterations  
+  guardrail_failures: 2        # Escalate after N guardrail failures
+  cooldown_iters: 2            # Wait N iterations before de-escalating
+  max_escalations: 2           # Maximum escalations per run
 ```
+
+## Model escalation
+
+When enabled, rauf can automatically escalate to a stronger model when backpressure signals persist:
+
+| Trigger | Description |
+|---------|-------------|
+| `consecutive_verify_fails` | N consecutive verification failures |
+| `no_progress_iters` | N iterations without progress |
+| `guardrail_failures` | N consecutive guardrail blocks |
+
+Escalation behavior:
+- **Bounded**: Max escalations limit prevents infinite model switching
+- **Cooldown**: After escalating, waits N iterations before de-escalating
+- **Observable**: Logged in JSONL and shown in `.rauf/state.md`
+
+Environment overrides:
+- `RAUF_MODEL_DEFAULT` / `RAUF_MODEL_STRONG` / `RAUF_MODEL_FLAG`
+- `RAUF_MODEL_ESCALATION_ENABLED=1`
 
 ### Policy explanations
 
@@ -397,7 +450,22 @@ strategy:
 | `RAUF_RETRY_BACKOFF_BASE` | Base backoff | `2s` |
 | `RAUF_RETRY_BACKOFF_MAX` | Max backoff | `30s` |
 | `RAUF_RETRY_NO_JITTER` | Disable jitter | `false` |
+| `RAUF_RETRY_NO_JITTER` | Disable jitter | `false` |
 | `RAUF_RETRY_MATCH` | Retry patterns | `rate limit,429,overloaded,timeout` |
+| `RAUF_QUIET` | Quiet mode | `false` |
+| `RAUF_TIMEOUT` | Overall timeout | - |
+| `RAUF_ATTEMPT_TIMEOUT` | Attempt timeout | - |
+| `RAUF_REPORT_PATH` | JSON report path | - |
+
+## CLI Improvements
+
+### Output control
+- `--quiet` / `--json`: Suppress logging and output structured JSON summary.
+- `--report <path>`: Write detailed run statistics (iterations, attempts, exit reasons) to a JSON file.
+
+### Timeouts
+- `--timeout <duration>`: Overall timeout for the command.
+- `--attempt-timeout <duration>`: Timeout for individual harness runs.
 
 ## Common failure modes
 

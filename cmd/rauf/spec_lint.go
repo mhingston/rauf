@@ -86,6 +86,8 @@ func parseCompletionContract(path string) (completionContract, error) {
 
 	contract := completionContract{}
 	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 0, 1024*1024)
+	scanner.Buffer(buf, 1024*1024)
 	inSection := false
 	currentList := ""
 	var fence fenceState // Use the shared fence state from fence.go

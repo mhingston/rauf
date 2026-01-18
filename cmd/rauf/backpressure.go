@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 )
@@ -88,27 +87,31 @@ func summarizeVerifyOutput(output string, maxLines int) []string {
 
 // generatePlanDiff creates a truncated diff excerpt when plan hash changes.
 // Returns the diff content and a source indicator ("working-tree" or "staged").
+// generatePlanDiff creates a truncated diff excerpt when plan hash changes.
+// Returns the diff content and a source indicator ("working-tree" or "staged").
 func generatePlanDiff(planPath string, gitAvailable bool, maxLines int) string {
 	if !gitAvailable || planPath == "" {
 		return "Plan file was modified (git diff unavailable)."
 	}
 
 	source := "working-tree"
-	output, err := exec.Command("git", "diff", "--", planPath).Output()
-	if err != nil || len(output) == 0 {
+	// Use gitOutputRaw to get the raw diff content (including exit codes if any)
+	// gitOutputRaw uses the mockable gitExec underlying function
+	output, err := gitOutputRaw("diff", "--", planPath)
+	if err != nil || output == "" {
 		// Try staged diff
-		output, err = exec.Command("git", "diff", "--cached", "--", planPath).Output()
+		output, err = gitOutputRaw("diff", "--cached", "--", planPath)
 		if err != nil {
 			return "Plan file was modified (git diff failed)."
 		}
 		source = "staged"
 	}
 
-	if len(output) == 0 {
+	if output == "" {
 		return "Plan file was modified (diff empty)."
 	}
 
-	lines := strings.Split(string(output), "\n")
+	lines := strings.Split(output, "\n")
 	if len(lines) > maxLines {
 		lines = lines[:maxLines]
 		lines = append(lines, "... (truncated)")
@@ -127,13 +130,38 @@ func buildBackpressurePack(state raufState, gitAvailable bool) string {
 	hasExitReason := state.PriorExitReason != "" && state.PriorExitReason != "completion_contract_satisfied"
 	hasPlanDrift := state.PlanHashBefore != "" && state.PlanHashAfter != "" && state.PlanHashBefore != state.PlanHashAfter
 	hasRetry := state.PriorRetryCount > 0
+	hasRecoveryMode := state.RecoveryMode != ""
 
-	if !hasGuardrail && !hasVerifyFail && !hasExitReason && !hasPlanDrift && !hasRetry {
+	if !hasGuardrail && !hasVerifyFail && !hasExitReason && !hasPlanDrift && !hasRetry && !hasRecoveryMode {
 		return ""
 	}
 
 	b.WriteString("## Backpressure Pack (from previous iteration)\n\n")
 	b.WriteString("**IMPORTANT: Address these issues FIRST before any new work.**\n\n")
+
+	// Recovery mode - strict instructions based on failure type
+	if hasRecoveryMode {
+		b.WriteString("### ⚠️ Recovery Mode Active\n\n")
+		switch state.RecoveryMode {
+		case "verify":
+			b.WriteString("**Mode: VERIFY RECOVERY**\n")
+			b.WriteString("- Only fix the verification failure.\n")
+			b.WriteString("- Do NOT start new work or make unrelated changes.\n")
+			b.WriteString("- Focus exclusively on making the test pass.\n\n")
+		case "guardrail":
+			b.WriteString("**Mode: GUARDRAIL RECOVERY**\n")
+			b.WriteString("- Only adjust your approach to unblock the guardrail.\n")
+			b.WriteString("- Do NOT retry the forbidden change.\n")
+			b.WriteString("- Choose an alternative file or strategy.\n\n")
+		case "no_progress":
+			b.WriteString("**Mode: NO-PROGRESS RECOVERY**\n")
+			b.WriteString("- You must either:\n")
+			b.WriteString("  1. Reduce scope to a smaller, achievable change, OR\n")
+			b.WriteString("  2. Ask a clarifying question via RAUF_QUESTION, OR\n")
+			b.WriteString("  3. Explicitly abandon this approach and try a different strategy\n")
+			b.WriteString("- Doing the same thing again will NOT work.\n\n")
+		}
+	}
 
 	// Priority ordering
 	b.WriteString("**Priority:**\n")
