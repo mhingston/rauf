@@ -244,7 +244,7 @@ Or for other harnesses:
 
 ```yaml
 harness: opencode
-harness_args: "--non-interactive"
+harness_args: "run"
 ```
 
 Environment variables:
