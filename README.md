@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="logo.png" width="300" alt="rauf logo" />
+</div>
+
 # rauf
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mhingston/rauf)
