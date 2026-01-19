@@ -3,8 +3,15 @@ package main
 import (
 	"bytes"
 	"io"
+	"regexp"
 	"strings"
 )
+
+var ansiRegex = regexp.MustCompile(`\x1b\[[?0-9;]*[a-zA-Z]`)
+
+func stripANSI(s string) string {
+	return ansiRegex.ReplaceAllString(s, "")
+}
 
 // filteringWriter wraps an io.Writer and skips lines matching a prefix.
 // It buffers partial lines until a newline is found.
@@ -34,8 +41,11 @@ func (fw *filteringWriter) Write(p []byte) (n int, err error) {
 		line := b[:i+1]
 		lineStr := string(line)
 
-		// Check if we should filter this line
-		if !strings.HasPrefix(strings.TrimSpace(lineStr), fw.prefix) {
+		// Check if we should filter this line.
+		// Strip ANSI codes before prefix check because some harnesses (like opencode)
+		// might emit mouse-tracking or other codes at the start of the line.
+		stripped := stripANSI(lineStr)
+		if !strings.HasPrefix(strings.TrimSpace(stripped), fw.prefix) {
 			if _, err := fw.w.Write(line); err != nil {
 				return 0, err
 			}

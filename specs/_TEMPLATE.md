@@ -13,7 +13,7 @@ As a <role>, I want <action>, so that <benefit>.
 ## 2. Non-Goals
 - ...
 
-## 3. Contract (SpecFirst)
+## 3. Contract
 Contract format: <TypeScript | JSON Schema | OpenAPI | SQL | UI State | CLI | Other>
 
 <contract content here>

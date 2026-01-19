@@ -50,14 +50,6 @@ func TestParseArgsModes(t *testing.T) {
 	if cfg.mode != "build" || cfg.maxIterations != 5 {
 		t.Fatalf("expected build mode with max 5")
 	}
-
-	cfg, err = parseArgs([]string{"import", "--stage", "requirements", "--slug", "user-auth"})
-	if err != nil {
-		t.Fatalf("import parse failed: %v", err)
-	}
-	if cfg.mode != "import" || cfg.importStage != "requirements" || cfg.importSlug != "user-auth" {
-		t.Fatalf("expected import with stage and slug")
-	}
 }
 
 func TestSplitArgs(t *testing.T) {
@@ -327,6 +319,27 @@ func TestStripQuotes(t *testing.T) {
 		result := stripQuotes(tt.input)
 		if result != tt.expected {
 			t.Errorf("stripQuotes(%q) = %q, want %q", tt.input, result, tt.expected)
+		}
+	}
+}
+
+func TestStripQuotesAndComments(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"", ""},
+		{"\"quoted\"", "quoted"},
+		{"'single'", "single"},
+		{"\"escaped \\\" quote\"", "escaped \\\" quote"},
+		{"unquoted # comment", "unquoted"},
+		{"\"quoted # with hash\"", "quoted # with hash"},
+	}
+
+	for _, tt := range tests {
+		got := stripQuotesAndComments(tt.input)
+		if got != tt.expected {
+			t.Errorf("stripQuotesAndComments(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
 	}
 }

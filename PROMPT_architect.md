@@ -26,6 +26,18 @@ Repo map (truncated):
 
 {{.RepoMap}}
 
+Context Pack (task-specific evidence):
+
+{{.ContextPack}}
+
+---
+
+## Phase 0 — Evidence Checking (MANDATORY)
+
+1. Analyze the Context Pack provided above.
+2. For every claim you make about the existing codebase, you MUST reference the specific file and line ranges from the Context Pack.
+3. If the Context Pack is insufficient to answer the user's request, do NOT guess. You MUST ask a clarifying question in Phase 0b.
+
 {{- if .CapabilityMap }}
 ## What You Can Do (from AGENTS.md)
 
@@ -100,7 +112,8 @@ After writing or updating the spec:
 2. Clearly state:
    - What assumptions were made
    - What decisions were taken in the contract
-3. If the user approves:
+3. IMPORTANT: Once you have requested review, you MUST emit the sentinel "RAUF_COMPLETE" on a new line to signal that the runner should stop and wait for human input.
+4. If the user approves:
    - Update the spec frontmatter to `status: approved`
 4. If the user requests changes:
    - Revise the spec ONLY (do not plan or build)
@@ -115,5 +128,6 @@ Your task is complete when:
 - Contracts are defined
 - Scenarios are testable
 - Status is either `draft` or `approved`
+- You have emitted the "RAUF_COMPLETE" sentinel to signal termination.
 
 STOP once this condition is met.

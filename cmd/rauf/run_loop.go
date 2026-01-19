@@ -237,22 +237,31 @@ var runMode = func(parentCtx context.Context, cfg modeConfig, fileCfg runtimeCon
 		}
 		state.BackpressureInjected = backpressurePack != ""
 
-		contextPack := ""
-		if cfg.mode == "build" {
-			contextPack = buildContextPack(planPath, task, verifyCmds, state, gitAvailable, needVerifyInstruction)
-		}
-
 		repoMap := ""
+		contextPack := ""
 		specIndex := ""
 		planSummary := ""
-		if cfg.mode == "architect" {
-			repoMap = buildRepoMap(gitAvailable)
+
+		if cfg.mode == "architect" || cfg.mode == "plan" {
+			taskStr := cfg.Goal
+			if taskStr == "" {
+				taskStr = task.TitleLine
+			}
+			var err error
+			repoMap, contextPack, err = buildEnhancedContext(parentCtx, taskStr, gitAvailable)
+			if err != nil {
+				iterStats.ExitReason = "context_builder_failed"
+				iterStats.Duration = time.Since(startIter).String()
+				report.Iterations = append(report.Iterations, iterStats)
+				return iterationResult{}, err
+			}
 		}
+
 		if cfg.mode == "plan" {
 			specIndex = buildSpecIndex()
-			repoMap = buildRepoMap(gitAvailable)
 		}
 		if cfg.mode == "build" {
+			contextPack = buildContextPack(planPath, task, verifyCmds, state, gitAvailable, needVerifyInstruction)
 			planSummary = buildPlanSummary(planPath, task)
 		}
 		capabilityMap := readAgentsCapabilityMap("AGENTS.md", maxCapabilityBytes)
@@ -268,6 +277,7 @@ var runMode = func(parentCtx context.Context, cfg modeConfig, fileCfg runtimeCon
 			SpecContext:             "",
 			RelevantFiles:           "",
 			RepoMap:                 repoMap,
+			ContextPack:             contextPack,
 			SpecIndex:               specIndex,
 			PlanSummary:             planSummary,
 			PriorVerification:       state.LastVerificationOutput,
@@ -280,8 +290,8 @@ var runMode = func(parentCtx context.Context, cfg modeConfig, fileCfg runtimeCon
 			report.Iterations = append(report.Iterations, iterStats)
 			return iterationResult{}, err
 		}
-		if backpressurePack != "" || contextPack != "" {
-			promptContent = backpressurePack + contextPack + "\n\n" + promptContent
+		if backpressurePack != "" {
+			promptContent = backpressurePack + "\n\n" + promptContent
 		}
 
 		logFile, logPath, err := openLogFile(cfg.mode, logDir)

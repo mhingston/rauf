@@ -25,6 +25,7 @@ type promptData struct {
 	SpecContext             string
 	RelevantFiles           string
 	RepoMap                 string
+	ContextPack             string
 	SpecIndex               string
 	PlanSummary             string
 	PriorVerification       string

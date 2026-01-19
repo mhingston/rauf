@@ -43,3 +43,16 @@ func TestWriteLogEntry_Nil(t *testing.T) {
 	// Should not panic
 	writeLogEntry(nil, logEntry{Type: "nil"})
 }
+
+func TestOpenLogFile_MkdirFail(t *testing.T) {
+	dir := t.TempDir()
+	logDir := filepath.Join(dir, "logs")
+	if err := os.WriteFile(logDir, []byte("not a dir"), 0o644); err != nil {
+		t.Fatalf("write log file placeholder: %v", err)
+	}
+
+	_, _, err := openLogFile("test", logDir)
+	if err == nil {
+		t.Errorf("expected error when mkdir fails")
+	}
+}

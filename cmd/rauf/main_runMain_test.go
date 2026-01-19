@@ -144,37 +144,3 @@ func TestRunMain_PlanWork(t *testing.T) {
 		t.Errorf("runMain(plan-work) = %d, want 0", got)
 	}
 }
-func TestRunMain_Import(t *testing.T) {
-	dir := t.TempDir()
-	cwd, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(cwd)
-
-	// Mock git
-	origGitExec := gitExec
-	defer func() { gitExec = origGitExec }()
-	gitExec = func(args ...string) (string, error) {
-		return "ok", nil
-	}
-
-	// 1. Valid import call
-	args := []string{"import", "--stage", "requirements", "--slug", "test-slug", "--force"}
-	got := runMain(args)
-	// It will likely fail with 1 because there's no specfirst dir to read from,
-	// but it will hit the parsing logic.
-	_ = got
-
-	// 2. Invalid flag
-	argsInvalid := []string{"import", "--unknown"}
-	gotInvalid := runMain(argsInvalid)
-	if gotInvalid != 1 {
-		t.Errorf("expected failure for unknown flag, got %d", gotInvalid)
-	}
-
-	// 3. Missing value
-	argsMissing := []string{"import", "--stage"}
-	gotMissing := runMain(argsMissing)
-	if gotMissing != 1 {
-		t.Errorf("expected failure for missing value, got %d", gotMissing)
-	}
-}

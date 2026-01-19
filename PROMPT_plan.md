@@ -27,6 +27,10 @@ Repo map (truncated):
 
 {{.RepoMap}}
 
+Context Pack (task-specific evidence):
+
+{{.ContextPack}}
+
 {{- if .CapabilityMap }}
 ## What You Can Do (from AGENTS.md)
 

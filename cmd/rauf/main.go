@@ -65,10 +65,6 @@ type modeConfig struct {
 	maxIterations  int
 	forceInit      bool
 	dryRunInit     bool
-	importStage    string
-	importSlug     string
-	importDir      string
-	importForce    bool
 	planPath       string
 	planWorkName   string
 	explicitMode   bool
@@ -77,6 +73,7 @@ type modeConfig struct {
 	Timeout        time.Duration
 	AttemptTimeout time.Duration
 	Quiet          bool
+	Goal           string
 }
 
 type runtimeConfig struct {
@@ -175,7 +172,6 @@ func runMain(args []string) int {
 				defer file.Close()
 				enc := json.NewEncoder(file)
 				enc.SetIndent("", "  ")
-				_ = enc.Encode(file) // Fix: encode report to file
 				_ = enc.Encode(report)
 			} else {
 				fmt.Fprintf(os.Stderr, "Warning: failed to write report to %s: %v\n", cfg.ReportPath, err)
@@ -192,13 +188,6 @@ func runMain(args []string) int {
 	}
 	if cfg.mode == "plan-work" {
 		if err := runPlanWork(cfg.planWorkName); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		return 0
-	}
-	if cfg.mode == "import" {
-		if err := runImportSpecfirst(cfg); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -224,10 +213,6 @@ func runMain(args []string) int {
 
 	if cfg.Quiet {
 		fileCfg.Quiet = true
-	}
-
-	if err := parseImportArgs(args, &cfg); err != nil {
-		// parseImportArgs handles overrides
 	}
 
 	// Setup runtime execution environment
@@ -314,10 +299,6 @@ func parseArgs(args []string) (modeConfig, error) {
 		maxIterations: 0,
 		forceInit:     false,
 		dryRunInit:    false,
-		importStage:   "requirements",
-		importSlug:    "",
-		importDir:     ".specfirst",
-		importForce:   false,
 		planPath:      "IMPLEMENTATION_PLAN.md",
 		explicitMode:  false,
 	}
@@ -378,12 +359,6 @@ func parseArgs(args []string) (modeConfig, error) {
 	case "--version", "version":
 		cfg.mode = "version"
 		return cfg, nil
-	case "import":
-		cfg.mode = "import"
-		if err := parseImportArgs(args[1:], &cfg); err != nil {
-			return cfg, err
-		}
-		return cfg, nil
 	case "init":
 		cfg.mode = "init"
 		if len(args) > 1 {
@@ -412,11 +387,14 @@ func parseArgs(args []string) (modeConfig, error) {
 		cfg.maxIterations = defaultArchitectIterations
 		cfg.explicitMode = true // Explicit mode name disables strategy
 		if len(args) > 1 {
-			max, err := parsePositiveInt(args[1])
-			if err != nil {
-				return cfg, err
+			if max, err := strconv.Atoi(args[1]); err == nil && max >= 0 {
+				cfg.maxIterations = max
+				if len(args) > 2 {
+					cfg.Goal = strings.Join(args[2:], " ")
+				}
+			} else {
+				cfg.Goal = strings.Join(args[1:], " ")
 			}
-			cfg.maxIterations = max
 		}
 	case "plan":
 		cfg.mode = "plan"
@@ -424,11 +402,14 @@ func parseArgs(args []string) (modeConfig, error) {
 		cfg.maxIterations = defaultPlanIterations
 		cfg.explicitMode = true // Explicit mode name disables strategy
 		if len(args) > 1 {
-			max, err := parsePositiveInt(args[1])
-			if err != nil {
-				return cfg, err
+			if max, err := strconv.Atoi(args[1]); err == nil && max >= 0 {
+				cfg.maxIterations = max
+				if len(args) > 2 {
+					cfg.Goal = strings.Join(args[2:], " ")
+				}
+			} else {
+				cfg.Goal = strings.Join(args[1:], " ")
 			}
-			cfg.maxIterations = max
 		}
 	default:
 		max, err := parsePositiveInt(args[0])
@@ -451,37 +432,6 @@ func parsePositiveInt(input string) (int, error) {
 		return 0, fmt.Errorf("invalid numeric value: %q", input)
 	}
 	return value, nil
-}
-
-func parseImportArgs(args []string, cfg *modeConfig) error {
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch arg {
-		case "--stage":
-			i++
-			if i >= len(args) {
-				return fmt.Errorf("missing value for --stage")
-			}
-			cfg.importStage = args[i]
-		case "--slug":
-			i++
-			if i >= len(args) {
-				return fmt.Errorf("missing value for --slug")
-			}
-			cfg.importSlug = args[i]
-		case "--specfirst-dir":
-			i++
-			if i >= len(args) {
-				return fmt.Errorf("missing value for --specfirst-dir")
-			}
-			cfg.importDir = args[i]
-		case "--force":
-			cfg.importForce = true
-		default:
-			return fmt.Errorf("unknown import flag: %q", arg)
-		}
-	}
-	return nil
 }
 
 func loadConfig(path string) (runtimeConfig, bool, error) {
@@ -997,8 +947,9 @@ var runHarnessOnce = func(ctx context.Context, prompt string, harness, harnessAr
 		logWriter = logFile
 	}
 
-	// Filter out RAUF_QUESTION: lines from stdout so the user sees only the interactive prompt
+	// Filter out RAUF_QUESTION: lines from stdout/stderr so the user sees only the interactive prompt
 	filteredStdout := newFilteringWriter(os.Stdout, "RAUF_QUESTION:")
+	filteredStderr := newFilteringWriter(os.Stderr, "RAUF_QUESTION:")
 
 	writers := []io.Writer{logWriter, buffer}
 	if !runner.Quiet {
@@ -1008,7 +959,7 @@ var runHarnessOnce = func(ctx context.Context, prompt string, harness, harnessAr
 
 	errWriters := []io.Writer{logWriter, buffer}
 	if !runner.Quiet {
-		errWriters = append(errWriters, os.Stderr)
+		errWriters = append(errWriters, filteredStderr)
 	}
 	cmd.Stderr = io.MultiWriter(errWriters...)
 	cmd.Env = os.Environ()
@@ -1194,7 +1145,6 @@ func workspaceFingerprint(root string, excludeDirs []string, excludeFiles []stri
 func printUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  rauf init [--force] [--dry-run]")
-	fmt.Println("  rauf import [--stage <id>] [--slug <slug>] [--specfirst-dir <path>] [--force]")
 	fmt.Println("  rauf plan-work \"<name>\"")
 	fmt.Println("  rauf [architect|plan|<max_iterations>]")
 	fmt.Println("")
@@ -1205,7 +1155,7 @@ func printUsage() {
 	fmt.Println("  rauf plan 3")
 	fmt.Println("  rauf architect")
 	fmt.Println("  rauf architect 5")
-	fmt.Println("  rauf import --stage requirements --slug user-auth")
+	fmt.Println("  rauf architect 5")
 	fmt.Println("  rauf plan-work \"add oauth\"")
 	fmt.Println("")
 	fmt.Println("Env:")
@@ -1490,74 +1440,6 @@ func runInit(force bool, dryRun bool) error {
 	return nil
 }
 
-type specfirstState struct {
-	StageOutputs map[string]specfirstStageOutput `json:"stage_outputs"`
-}
-
-type specfirstStageOutput struct {
-	PromptHash string   `json:"prompt_hash"`
-	Files      []string `json:"files"`
-}
-
-type artifactFile struct {
-	name    string
-	content string
-}
-
-func runImportSpecfirst(cfg modeConfig) error {
-	if cfg.importStage == "" {
-		return fmt.Errorf("stage is required")
-	}
-	statePath := filepath.Join(cfg.importDir, "state.json")
-	stateBytes, err := os.ReadFile(statePath)
-	if err != nil {
-		return fmt.Errorf("failed to read %s: %w", statePath, err)
-	}
-
-	var state specfirstState
-	if err := json.Unmarshal(stateBytes, &state); err != nil {
-		return fmt.Errorf("failed to parse %s: %w", statePath, err)
-	}
-
-	stageOutput, ok := state.StageOutputs[cfg.importStage]
-	if !ok {
-		return fmt.Errorf("stage %q not found in %s", cfg.importStage, statePath)
-	}
-	if stageOutput.PromptHash == "" {
-		return fmt.Errorf("stage %q has no prompt hash in %s", cfg.importStage, statePath)
-	}
-	if len(stageOutput.Files) == 0 {
-		return fmt.Errorf("stage %q has no output files in %s", cfg.importStage, statePath)
-	}
-
-	slug := cfg.importSlug
-	if slug == "" {
-		slug = slugFromFiles(stageOutput.Files, cfg.importStage)
-	}
-	slug = slugify(slug)
-	if slug == "" {
-		return fmt.Errorf("unable to derive a valid slug")
-	}
-
-	specsDir := "specs"
-	if err := os.MkdirAll(specsDir, 0o755); err != nil {
-		return err
-	}
-	specPath := filepath.Join(specsDir, slug+".md")
-	if _, err := os.Stat(specPath); err == nil && !cfg.importForce {
-		return fmt.Errorf("spec file exists: %s (use --force to overwrite)", specPath)
-	}
-
-	files, err := readSpecfirstArtifacts(cfg.importDir, cfg.importStage, stageOutput.PromptHash, stageOutput.Files)
-	if err != nil {
-		return err
-	}
-
-	artifactTitle := titleFromArtifacts(files, slug)
-	content := buildSpecFromArtifact(slug, artifactTitle, cfg.importStage, stageOutput.PromptHash, files)
-	return os.WriteFile(specPath, []byte(content), 0o644)
-}
-
 func ensureGitignoreLogs(dryRun bool) (bool, error) {
 	const entry = "logs/"
 	path := ".gitignore"
@@ -1584,62 +1466,6 @@ func ensureGitignoreLogs(dryRun bool) (bool, error) {
 	return true, os.WriteFile(path, content, 0o644)
 }
 
-func hasAgentsPlaceholders(path string) bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	text := string(data)
-	placeholders := []string{
-		"[test command]",
-		"[full test command]",
-		"[lint command]",
-		"[typecheck/build command]",
-	}
-	for _, placeholder := range placeholders {
-		if strings.Contains(text, placeholder) {
-			return true
-		}
-	}
-	return false
-}
-
-func readSpecfirstArtifacts(root, stage, hash string, files []string) ([]artifactFile, error) {
-	baseDir := filepath.Join(root, "artifacts", stage, hash)
-	absBaseDir, err := filepath.Abs(baseDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve artifact base directory: %w", err)
-	}
-	artifacts := make([]artifactFile, 0, len(files))
-	for _, name := range files {
-		// Validate filename doesn't escape base directory via path traversal
-		path := filepath.Join(baseDir, name)
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve artifact path %s: %w", name, err)
-		}
-		// Ensure resolved path is within the expected directory
-		if !strings.HasPrefix(absPath, absBaseDir+string(filepath.Separator)) && absPath != absBaseDir {
-			return nil, fmt.Errorf("artifact path %q escapes base directory", name)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read artifact %s: %w", path, err)
-		}
-		artifacts = append(artifacts, artifactFile{name: name, content: string(data)})
-	}
-	return artifacts, nil
-}
-
-func slugFromFiles(files []string, fallback string) string {
-	if len(files) == 1 {
-		base := filepath.Base(files[0])
-		ext := filepath.Ext(base)
-		return strings.TrimSuffix(base, ext)
-	}
-	return fallback
-}
-
 func slugify(value string) string {
 	lower := strings.ToLower(value)
 	var b strings.Builder
@@ -1662,60 +1488,24 @@ func slugify(value string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-func titleFromArtifacts(files []artifactFile, fallback string) string {
-	for _, file := range files {
-		lines := strings.Split(file.content, "\n")
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "# ") && len(line) > 2 {
-				return strings.TrimSpace(strings.TrimPrefix(line, "# "))
-			}
+func hasAgentsPlaceholders(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	text := string(data)
+	placeholders := []string{
+		"[test command]",
+		"[full test command]",
+		"[lint command]",
+		"[typecheck/build command]",
+	}
+	for _, placeholder := range placeholders {
+		if strings.Contains(text, placeholder) {
+			return true
 		}
 	}
-	return fallback
-}
-
-func buildSpecFromArtifact(slug, title, stage, hash string, files []artifactFile) string {
-	var b strings.Builder
-	b.WriteString("---\n")
-	b.WriteString("id: " + slug + "\n")
-	b.WriteString("status: draft # draft | approved\n")
-	b.WriteString("version: 0.1.0\n")
-	b.WriteString("owner: <optional>\n")
-	b.WriteString("source: specfirst\n")
-	b.WriteString("stage: " + stage + "\n")
-	b.WriteString("artifact: " + hash + "\n")
-	b.WriteString("---\n\n")
-	b.WriteString("# " + title + "\n\n")
-	b.WriteString("## 1. Context & User Story\n")
-	b.WriteString("Imported from SpecFirst " + stage + " artifact. See Appendix.\n\n")
-	b.WriteString("## 2. Non-Goals\n")
-	b.WriteString("- TBD\n\n")
-	b.WriteString("## 3. Contract (SpecFirst)\n")
-	b.WriteString("Contract format: <TypeScript | JSON Schema | OpenAPI | SQL | UI State | CLI | Other>\n\n")
-	b.WriteString("TBD\n\n")
-	b.WriteString("## 4. Scenarios (Acceptance Criteria)\n")
-	b.WriteString("### Scenario: TBD\n")
-	b.WriteString("Given ...\n")
-	b.WriteString("When ...\n")
-	b.WriteString("Then ...\n\n")
-	b.WriteString("Verification:\n")
-	b.WriteString("- TBD: add harness\n\n")
-	b.WriteString("## 5. Constraints / NFRs\n")
-	b.WriteString("- Performance: TBD\n")
-	b.WriteString("- Security: TBD\n")
-	b.WriteString("- Compatibility: TBD\n")
-	b.WriteString("- Observability: TBD\n\n")
-	b.WriteString("## 6. Open Questions / Assumptions\n")
-	b.WriteString("- Assumption: TBD\n")
-	b.WriteString("- Open question: TBD\n\n")
-	b.WriteString("## Appendix: SpecFirst " + stage + " Artifact\n")
-	for _, file := range files {
-		b.WriteString("\n### " + file.name + "\n\n")
-		b.WriteString(strings.TrimRight(file.content, "\n"))
-		b.WriteString("\n")
-	}
-	return b.String()
+	return false
 }
 
 const promptArchitect = `# ROLE: System Architect (Spec-First)
@@ -2078,7 +1868,7 @@ As a <role>, I want <action>, so that <benefit>.
 ## 2. Non-Goals
 - ...
 
-## 3. Contract (SpecFirst)
+## 3. Contract
 Contract format: <TypeScript | JSON Schema | OpenAPI | SQL | UI State | CLI | Other>
 
 <contract content here>
@@ -2186,12 +1976,29 @@ verify_missing_policy: strict # strict | agent_enforced | fallback
 allow_verify_fallback: false
 require_verify_on_change: false
 require_verify_for_plan_update: false
+plan_lint_policy: warn
 retry_on_failure: false
 retry_max_attempts: 3
 retry_backoff_base: 2s
 retry_backoff_max: 30s
 retry_jitter: true
 retry_match: "rate limit,429,overloaded,timeout"
+model_default: ""
+model_strong: ""
+model_flag: "--model"
+model_override: false
+model_escalation:
+  enabled: false
+  consecutive_verify_fails: 2
+  no_progress_iters: 2
+  guardrail_failures: 2
+  cooldown_iters: 2
+  min_strong_iterations: 2
+  max_escalations: 2
+recovery:
+  consecutive_verify_fails: 2
+  no_progress_iters: 2
+  guardrail_failures: 2
 strategy:
   - mode: plan
     iterations: 1

@@ -151,6 +151,15 @@ func TestTruncate(t *testing.T) {
 	if len(trunc) > 4 {
 		t.Errorf("expected length <= 4, got %d", len(trunc))
 	}
+
+	// UTF-8 boundary test for tail
+	utfStr := "abcdef" + string([]byte{0xF0, 0x9F, 0x8C, 0x8D}) // "abcdef🌍"
+	if got := truncateTail(utfStr, 3); got != "" {
+		t.Errorf("truncateTail utf8 split: got %q", got)
+	}
+	if got := truncateTail(utfStr, 4); got != "🌍" {
+		t.Errorf("truncateTail utf8 exact: got %q", got)
+	}
 }
 
 func TestIsWithinRoot(t *testing.T) {
@@ -180,7 +189,7 @@ func TestBuildRepoMap_Truncate(t *testing.T) {
 
 	gitOutput = func(args ...string) (string, error) {
 		var lines []string
-		for i := 0; i < maxRepoMapLines + 10; i++ {
+		for i := 0; i < maxRepoMapLines+10; i++ {
 			lines = append(lines, "file")
 		}
 		return strings.Join(lines, "\n"), nil
@@ -196,11 +205,11 @@ func TestBuildRepoMap_Truncate(t *testing.T) {
 func TestBuildContextPack_Full(t *testing.T) {
 	task := planTask{
 		TitleLine: "## Task 2",
-		SpecRefs: []string{"spec.md"},
+		SpecRefs:  []string{"spec.md"},
 	}
 	state := raufState{
-		RecoveryMode:           "verify",
-		LastVerificationOutput: "fail",
+		RecoveryMode:            "verify",
+		LastVerificationOutput:  "fail",
 		LastVerificationCommand: "make test",
 		Assumptions: []Assumption{
 			{Question: "Q1", StickyScope: "global"},
@@ -211,7 +220,7 @@ func TestBuildContextPack_Full(t *testing.T) {
 			{Assumption: Assumption{Question: "Q4"}, ClearedRecoveryMode: "other", ClearedReason: "ignore"},
 		},
 	}
-	
+
 	// Create dummy spec file
 	dir := t.TempDir()
 	cwd, _ := os.Getwd()
