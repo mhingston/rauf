@@ -105,6 +105,8 @@ strategy:
     until: verify_pass
 ```
 
+Note: `rauf init` writes a default `strategy` to `rauf.yaml`, so running `rauf` will follow it (plan → build). To run build-only, use `rauf build` or remove/clear `strategy` in config.
+
 | Strategy Option | Description | Values |
 |-----------------|-------------|--------|
 | `mode` | Which mode to run | `architect`, `plan`, `build` |
