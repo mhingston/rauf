@@ -207,9 +207,7 @@ func runMain(args []string) int {
 		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
 		return 1
 	}
-	if !ok {
-		fileCfg = runtimeConfig{}
-	}
+	_ = ok
 
 	if cfg.Quiet {
 		fileCfg.Quiet = true
@@ -449,15 +447,15 @@ func loadConfig(path string) (runtimeConfig, bool, error) {
 		ModelEscalation:     defaultEscalationConfig(),
 		Recovery:            defaultRecoveryConfig(),
 	}
+	ok := true
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return cfg, false, nil
+			ok = false
+		} else {
+			return cfg, false, fmt.Errorf("failed to read %s: %w", path, err)
 		}
-		return cfg, false, fmt.Errorf("failed to read %s: %w", path, err)
-	}
-
-	if err := parseConfigBytes(data, &cfg); err != nil {
+	} else if err := parseConfigBytes(data, &cfg); err != nil {
 		return cfg, true, fmt.Errorf("failed to parse %s: %w", path, err)
 	}
 	if q, ok := envBool("RAUF_QUIET"); ok {
@@ -541,7 +539,7 @@ func loadConfig(path string) (runtimeConfig, bool, error) {
 		cfg.ModelEscalation.Enabled = me
 	}
 
-	return cfg, true, nil
+	return cfg, ok, nil
 }
 
 func parseConfigBytes(data []byte, cfg *runtimeConfig) error {

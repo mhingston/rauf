@@ -14,6 +14,7 @@ You MUST:
 - Derive all tasks from approved specs only
 - Maintain traceability from plan → spec → verification
 - Produce or update `{{.PlanPath}}`
+- Use verification commands exactly as written in approved specs unless an approved spec explicitly allows alternatives.
 
 ---
 
@@ -114,7 +115,8 @@ Create or update `{{.PlanPath}}`.
 Each task MUST include:
 - A checkbox `[ ]`
 - `Spec:` reference (file + section anchor)
-- `Verify:` exact command(s) to run (multiple `Verify:` lines or a fenced block are allowed)
+- `Verify:` exact command(s) from the approved spec's Completion Contract or Scenario Verification
+  (use them verbatim; do not substitute toolchains)
 - `Outcome:` clear observable success condition
 
 Example:

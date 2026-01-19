@@ -83,7 +83,7 @@ func runArchitectQuestions(ctx context.Context, runner runtimeExec, promptConten
 		if len(answers) == 0 {
 			break
 		}
-		*promptContent = *promptContent + "\n\n# Architect Answers\n\n" + strings.Join(answers, "\n\n")
+		*promptContent = *promptContent + "\n\n# Architect Answers\n\nThe following answers come from the user in response to your clarification questions. Treat them as authoritative and do not re-ask the same questions unless new ambiguity is introduced.\n\n" + strings.Join(answers, "\n\n")
 		nextResult, err := runHarness(ctx, *promptContent, harness, harnessArgs, logFile, retryCfg, runner)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Architect follow-up failed:", err)
