@@ -255,16 +255,55 @@ harness: claude
 harness_args: "-p --output-format=stream-json --model sonnet --verbose"
 ```
 
+### GitHub Copilot CLI
+
+[GitHub Copilot CLI](https://github.com/github/copilot-cli) can be used in non-interactive mode:
+
+```yaml
+harness: copilot
+harness_args: "-p {prompt} --allow-all-tools --silent --no-color"
+```
+
+Key flags:
+- `-p`: Prompt mode (non-interactive)
+- `--allow-all-tools`: Auto-approve tool executions
+- `--silent`: Suppress stats output
+- `--no-color`: Disable color for cleaner logs
+
+### OpenCode
+
+[OpenCode](https://github.com/anomalyco/opencode) can be used with the `run` subcommand:
+
+```yaml
+harness: opencode
+harness_args: 'run "{prompt}"'
+```
+
+### Custom Wrappers
+
+For harnesses requiring special setup, create a wrapper script:
+
+```bash
+#!/bin/bash
+# harness-wrapper.sh
+PROMPT="${1:-$(cat)}"
+exec my-harness --custom-flags "$PROMPT"
+```
+
+Then configure:
+
+```yaml
+harness: ./harness-wrapper.sh
+```
+
 ### Argument injection
 
-If your harness requires the prompt as a command-line argument instead of via stdin (e.g. `opencode`), use the `{prompt}` placeholder:
+If your harness requires the prompt as a command-line argument instead of via stdin, use the `{prompt}` placeholder:
 
 ```yaml
 harness: script
 harness_args: '-q /dev/null opencode run "{prompt}"'
 ```
-
-**Note:** `opencode` requires a pseudo-TTY to run, so we wrap it with `script`.
 
 When `{prompt}` is detected in `harness_args`, rauf injects the prompt there and skips writing to stdin.
 
