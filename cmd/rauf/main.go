@@ -47,7 +47,7 @@ const (
 	defaultPlanIterations      = 1
 )
 
-var version = "v1.3.3"
+var version = "v1.3.4"
 
 var defaultRetryMatch = []string{"rate limit", "429", "overloaded", "timeout"}
 
