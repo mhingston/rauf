@@ -42,9 +42,7 @@ go build -o rauf ./cmd/rauf
 flowchart LR
     A[Architect] -->|specs/*.md| B[Plan]
     B -->|IMPLEMENTATION_PLAN.md| C[Build]
-    C -->|iterate| C
-    C -->|verify pass| D[git commit]
-    D --> B
+    C -->|iterate & commit| C
 ```
 
 1. **Architect**: define WHAT must be built (`specs/`) — run manually
