@@ -47,11 +47,11 @@ flowchart LR
     D --> B
 ```
 
-1. **Architect**: define WHAT must be built (`specs/`)
-2. **Plan**: derive tasks from approved specs (`IMPLEMENTATION_PLAN.md`)
-3. **Build**: implement one verified task per iteration
+1. **Architect**: define WHAT must be built (`specs/`) — run manually
+2. **Plan**: derive tasks from approved specs (`IMPLEMENTATION_PLAN.md`) — run manually
+3. **Build**: implement one verified task per iteration — **loops automatically**
 
-Each phase is isolated and enforced.
+Only the **Build** stage loops. Each build iteration enforces [Phase 0d & Phase 2b gates](#build-loop-integrity-phase-0d--phase-2b-gates) to ensure quality and prevent drift.
 
 ## Quick start
 
