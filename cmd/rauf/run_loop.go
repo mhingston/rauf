@@ -453,6 +453,12 @@ var runMode = func(parentCtx context.Context, cfg modeConfig, fileCfg runtimeCon
 			}
 		}
 
+		if cfg.mode == "architect" {
+			if updatedOutput, questionsAsked := runArchitectQuestions(ctx, runner, &promptContent, output, state, harness, effectiveHarnessArgs, logFile, retryCfg, stdin, stdout); questionsAsked {
+				output = updatedOutput
+			}
+		}
+
 		completionSignal := ""
 		completionOk := true
 		completionSpecs := []string{}
@@ -471,11 +477,6 @@ var runMode = func(parentCtx context.Context, cfg modeConfig, fileCfg runtimeCon
 		prevVerifyStatus := state.LastVerificationStatus
 		prevVerifyHash := state.LastVerificationHash
 		currentVerifyHash := "" // Will be set after verification runs
-		if cfg.mode == "architect" {
-			if updatedOutput, questionsAsked := runArchitectQuestions(ctx, runner, &promptContent, output, state, harness, effectiveHarnessArgs, logFile, retryCfg, stdin, stdout); questionsAsked {
-				output = updatedOutput
-			}
-		}
 
 		verifyStatus := "skipped"
 		verifyOutput := ""
@@ -804,8 +805,18 @@ func promptForMode(mode string) string {
 }
 
 func hasCompletionSentinel(output string) bool {
-	return scanLinesOutsideFence(output, func(trimmed string) bool {
-		return trimmed == completionSentinel
+	return scanLinesOutsideFence(output, func(line string) bool {
+		trimmed := strings.TrimSpace(line)
+		// Match exactly RAUF_COMPLETE or with common trailing punctuation
+		if trimmed == completionSentinel {
+			return true
+		}
+		for _, punc := range []string{".", "!", "?"} {
+			if trimmed == completionSentinel+punc {
+				return true
+			}
+		}
+		return false
 	})
 }
 

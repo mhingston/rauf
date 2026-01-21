@@ -13,3 +13,4 @@ coverage.html
 # Built binaries
 /rauf
 /cmd/rauf/rauf
+logs/

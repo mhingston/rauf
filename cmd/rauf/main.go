@@ -43,7 +43,7 @@ type IterationStats struct {
 }
 
 const (
-	defaultArchitectIterations = 10
+	defaultArchitectIterations = 1
 	defaultPlanIterations      = 1
 )
 
@@ -264,6 +264,18 @@ func runMain(args []string) int {
 	// Or I can just check the critical ones.
 
 	harnessArgs := fileCfg.HarnessArgs
+
+	// Prompt for goal in architect mode if not provided and running interactively
+	if cfg.mode == "architect" && cfg.Goal == "" && isTerminal(os.Stdin) && !cfg.Quiet {
+		fmt.Print("What are you building? (Enter a brief description/goal): ")
+		scanner := bufio.NewScanner(os.Stdin)
+		if scanner.Scan() {
+			cfg.Goal = strings.TrimSpace(scanner.Text())
+		}
+		if cfg.Goal == "" {
+			fmt.Println("Warning: No goal provided. Architect may make assumptions about what to build.")
+		}
+	}
 
 	if len(fileCfg.Strategy) > 0 && !cfg.explicitMode {
 		if err := runStrategy(ctx, cfg, fileCfg, runner, state, gitAvailable, branch, cfg.planPath, harness, harnessArgs, fileCfg.NoPush, fileCfg.LogDir, fileCfg.RetryOnFailure, fileCfg.RetryMaxAttempts, fileCfg.RetryBackoffBase, fileCfg.RetryBackoffMax, fileCfg.RetryJitter, fileCfg.RetryMatch, os.Stdin, os.Stdout, report); err != nil {
@@ -1688,7 +1700,33 @@ that lists scenarios already covered and where they live.
 
 ---
 
-## Phase 2 — Spec-to-Plan Extraction
+## Phase 2 — Plan File Structure
+
+The plan file "{{.PlanPath}}" follows this structure:
+
+    # Implementation Plan
+
+    <!-- Task lines must use "- [ ]" or "- [x]" for rauf to detect status. -->
+
+    ## Proposed Changes
+
+    > (optional context note)
+    - [ ] T1: Task title
+      - Spec: specs/file.md#section
+      - Verify: command
+      - Outcome: success condition
+
+
+IMPORTANT:
+- ALL tasks MUST be under the "## Proposed Changes" heading
+- If the file exists but only contains the template, REPLACE the template task with real tasks
+- If the file doesn't exist, CREATE it with the structure above
+- Preserve any completed tasks (marked with "[x]")
+- Do NOT create multiple "## Proposed Changes" sections
+
+---
+
+## Phase 3 — Spec-to-Plan Extraction
 
 For EACH approved spec:
 
@@ -1712,18 +1750,20 @@ Derive tasks ONLY for gaps identified in Phase 1.
 
 Create or update "{{.PlanPath}}".
 
+ALL tasks MUST be placed under the "## Proposed Changes" heading.
+
 Each task MUST include:
 - A checkbox "[ ]"
 - "Spec:" reference (file + section anchor)
 - "Verify:" exact command(s) to run
 - "Outcome:" clear observable success condition
 
-Example:
+Example task format:
 
-- [ ] T3: Enforce unique user email
-  - Spec: specs/user-profile.md#Scenario-duplicate-email
-  - Verify: npm test -- user-profile
-  - Outcome: duplicate email creation fails with 409
+    - [ ] T3: Enforce unique user email
+      - Spec: specs/user-profile.md#Scenario-duplicate-email
+      - Verify: npm test -- user-profile
+      - Outcome: duplicate email creation fails with 409
 
 ---
 
@@ -1946,12 +1986,14 @@ const planTemplate = `# Implementation Plan
 
 <!-- Task lines must use "- [ ]" or "- [x]" for rauf to detect status. -->
 
-## Feature: <name> (from specs/<slug>.md)
-- [ ] T1: <task title>
-  - Spec: specs/<slug>.md#<section>
-  - Verify: <command>
-  - Outcome: <what success looks like>
-  - Notes: <optional>
+## Proposed Changes
+
+> (no approved specs found)
+- [ ] T1: Run architect to produce approved specs
+  - Spec: specs/README.md#Approval-Gate
+  - Verify: grep -n "^status:\s*approved" specs/*.md
+  - Outcome: At least one spec file under specs/ contains frontmatter 'status: approved'
+  - Notes: This is a recovery step; stop after producing approved specs so the Planner can proceed.
 `
 
 const configTemplate = `# rauf configuration
@@ -2004,3 +2046,11 @@ strategy:
     iterations: 5
     until: verify_pass
 `
+
+func isTerminal(f *os.File) bool {
+	stat, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return (stat.Mode() & os.ModeCharDevice) != 0
+}
