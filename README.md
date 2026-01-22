@@ -10,6 +10,29 @@
 It enforces explicit specifications, verification-backed planning, and
 one-task-at-a-time implementation.
 
+## Table of Contents
+
+- [Why rauf](#why-rauf)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Core Loop](#core-loop)
+- [Human-in-the-Loop Workflow](#human-in-the-loop-workflow)
+- [Usage](#usage)
+  - [Modes](#modes)
+  - [Strategy Mode](#strategy-mode)
+  - [Completion Contracts](#completion-contracts)
+- [Architecture & Design](#architecture--design)
+- [Reference Guide](#reference-guide)
+  - [Files](#files-rauf-cares-about)
+  - [CLI Options](#cli-options)
+  - [Environment Variables](#environment-variables)
+  - [Config Reference](#config-reference-raufyaml)
+  - [File Formats](#file-formats)
+- [Advanced Concepts](#advanced-concepts)
+- [Support](#support)
+
+---
+
 ## Why rauf
 
 rauf is designed for:
@@ -36,6 +59,27 @@ cd rauf
 go build -o rauf ./cmd/rauf
 ```
 
+## Quick Start
+
+```bash
+rauf init                           # Create rauf.yaml, AGENTS.md, and templates
+# Edit AGENTS.md to add your repo's commands
+
+rauf architect "improve test coverage to 85%"
+# AI may ask: "Which modules should be prioritized?"
+# Answer questions interactively
+# Review specs/test-coverage.md
+
+# MANUAL GATE: Edit specs/test-coverage.md, set status: approved
+
+rauf plan                           # Derive tasks from approved specs
+# Review IMPLEMENTATION_PLAN.md
+# Edit tasks if needed
+
+rauf 5                              # Run 5 build iterations
+# Monitor verification results
+```
+
 ## Core loop
 
 ```mermaid
@@ -51,18 +95,86 @@ flowchart LR
 
 Only the **Build** stage loops. Each build iteration enforces [Phase 0d & Phase 2b gates](#build-loop-integrity-phase-0d--phase-2b-gates) to ensure quality and prevent drift.
 
-## Quick start
+## Human-in-the-Loop Workflow
+
+rauf enforces **manual approval gates** between phases to ensure human oversight and control.
+
+<details>
+<summary><b>Phase 1: Architect (Define WHAT)</b></summary>
 
 ```bash
-rauf init                    # Create rauf.yaml, AGENTS.md, and templates
-# edit AGENTS.md to add your repo's commands
-
-rauf architect               # Define WHAT (writes to specs/)
-# review spec, set status: approved
-
-rauf plan                    # Derive tasks from approved specs
-rauf 5                       # Run 5 build iterations
+rauf architect "add user authentication"
 ```
+
+**What it does:**
+- Creates/updates specification files in `specs/`
+- May ask up to 5 clarifying questions (e.g., "Which auth method?", "What's the API contract?")
+- Questions are **dynamic and context-aware** (won't ask irrelevant questions)
+- Emits `RAUF_COMPLETE` when spec is ready for review
+
+**Questions asked:** ✅ Yes (only when goal is ambiguous)
+
+**Your action required:**
+1. Review the generated spec in `specs/*.md`
+2. **Manually edit the frontmatter** to set `status: approved`
+3. Do NOT proceed to plan until you approve the spec
+
+**Example approval:**
+```yaml
+---
+id: user-auth
+status: approved  # Change from 'draft' to 'approved'
+version: 0.1.0
+---
+```
+
+</details>
+
+<details>
+<summary><b>Phase 2: Plan (Spec → Tasks)</b></summary>
+
+```bash
+rauf plan
+```
+
+**What it does:**
+- Reads **only approved specs** (ignores drafts)
+- Performs gap analysis to see what already exists in codebase
+- Creates/updates `IMPLEMENTATION_PLAN.md` with executable tasks
+- Each task includes: `Spec:` reference, `Verify:` command, `Outcome:` criteria
+
+**Questions asked:** ❌ No (works from approved specs)
+
+**Your action required:**
+1. Review the generated `IMPLEMENTATION_PLAN.md`
+2. Verify tasks are correct and properly ordered
+3. Edit/remove/reorder tasks as needed
+4. Proceed to build when ready
+
+</details>
+
+<details>
+<summary><b>Phase 3: Build (Execute Tasks)</b></summary>
+
+```bash
+rauf 5  # Run 5 build iterations
+```
+
+**What it does:**
+- Reads unchecked tasks from `IMPLEMENTATION_PLAN.md`
+- Implements one task per iteration
+- Runs verification after each task
+- Commits on verification pass
+- Stops on verification fail (with configurable policies)
+
+**Questions asked:** ❌ No (executes from plan)
+
+**Your action required:**
+- Monitor progress and verification results
+- Review commits before pushing (if needed)
+- Fix any verification failures manually if needed
+
+</details>
 
 ---
 
@@ -80,7 +192,8 @@ rauf operates in distinct modes, each with its own prompt file and behavior:
 
 The optional `[N]` argument limits iterations (e.g., `rauf plan 3` runs up to 3 plan iterations).
 
-#### Mode behaviors
+<details>
+<summary><b>Mode behaviors comparison</b></summary>
 
 | Behavior | Architect | Plan | Build |
 |----------|-----------|------|-------|
@@ -89,6 +202,10 @@ The optional `[N]` argument limits iterations (e.g., `rauf plan 3` runs up to 3 
 | Runs verification | No | No | Yes |
 | Enforces guardrails | No | No | Yes |
 | Injects backpressure | No | Yes | Yes |
+| **Asks interactive questions** | **Yes (up to 5)** | **No** | **No** |
+| **Requires manual approval** | **Yes** | **Review recommended** | **No** |
+
+</details>
 
 ### Strategy mode
 
@@ -171,6 +288,9 @@ Note: `--report`, `--timeout`, and `--attempt-timeout` are CLI-only flags (no en
 
 ### Environment variables
 
+<details>
+<summary><b>View all environment variables</b></summary>
+
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `RAUF_HARNESS` | Harness command | `claude` |
@@ -199,7 +319,12 @@ Note: `--report`, `--timeout`, and `--attempt-timeout` are CLI-only flags (no en
 | `RAUF_MODEL_ESCALATION_ENABLED` | Enable model escalation | `false` |
 | `RAUF_QUIET` | Quiet mode | `false` |
 
+</details>
+
 ### Config reference (`rauf.yaml`)
+
+<details>
+<summary><b>View full config example</b></summary>
 
 ```yaml
 harness: claude                    # Executable to run
@@ -250,9 +375,12 @@ recovery:
   guardrail_failures: 2
 ```
 
+</details>
+
 ### File formats
 
-#### Spec file (`specs/*.md`)
+<details>
+<summary><b>Spec file format (<code>specs/*.md</code>)</b></summary>
 
 ```markdown
 ---
@@ -300,7 +428,10 @@ Verification:
 - npm test -- --grep "valid login"
 ```
 
-#### Plan file (`IMPLEMENTATION_PLAN.md`)
+</details>
+
+<details>
+<summary><b>Plan file format (<code>IMPLEMENTATION_PLAN.md</code>)</b></summary>
 
 ```markdown
 # Implementation Plan
@@ -318,29 +449,39 @@ Verification:
   - Outcome: Login response includes JWT token
 ```
 
+</details>
+
 ---
 
 ## Advanced Concepts
 
-### Harnesses
+<details>
+<summary><b>Harnesses</b></summary>
 
 A harness is any executable that reads a prompt from stdin and writes responses to stdout/stderr. Default: `claude`.
 
-#### GitHub Copilot CLI
+**Codex:**
+```yaml
+harness: codex
+harness_args: "exec --full-auto"
+```
 
+**GitHub Copilot CLI:**
 ```yaml
 harness: copilot
 harness_args: "-p {prompt} --allow-all-tools --silent --no-color"
 ```
 
-#### OpenCode
-
+**OpenCode:**
 ```yaml
 harness: script
 harness_args: '-q /dev/null opencode run "{prompt}"'
 ```
 
-### Backpressure system
+</details>
+
+<details>
+<summary><b>Backpressure system</b></summary>
 
 | Trigger | Action |
 |---------|--------|
@@ -351,12 +492,15 @@ harness_args: '-q /dev/null opencode run "{prompt}"'
 | Harness retries | Advise reducing output/tool calls |
 | No progress | Suggest scope reduction or alternative strategy |
 
-#### Hypothesis requirement
+**Hypothesis requirement:**
 After 2+ consecutive verify failures, the agent must provide:
 - `HYPOTHESIS`: Why the previous fix failed
 - `DIFFERENT_THIS_TIME`: What will be done differently
 
-### Model escalation
+</details>
+
+<details>
+<summary><b>Model escalation</b></summary>
 
 Enabled rauf to automatically escalate to a stronger model when backpressure persists:
 
@@ -366,18 +510,26 @@ Enabled rauf to automatically escalate to a stronger model when backpressure per
 | `no_progress_iters` | N iterations without progress |
 | `guardrail_failures` | N consecutive guardrail blocks |
 
-### Safety and control
+</details>
+
+<details>
+<summary><b>Safety and control</b></summary>
 
 - **Runtime isolation**: `host`, `docker`, or `docker-persist`
 - **Circuit breakers**: `max_files_changed`, `max_commits_per_iteration`, `no_progress_iterations`
 - **Hard limits**: Per-step `iterations` and `until` conditions in strategy mode
 
-### Build Loop Integrity (Phase 0d & Phase 2b Gates)
+</details>
+
+<details>
+<summary><b>Build Loop Integrity (Phase 0d & Phase 2b Gates)</b></summary>
 
 `rauf` enforces a "Plan → Do → Check" loop during the `build` mode to prevent drift and ensure quality:
 
 - **Phase 0d (Architect Sanity Check)**: Before writing code, the agent must restate the task, declare scope (Will/Will NOT change), and validate that the spec and context are sufficient.
 - **Phase 2b (Pre-Commit Review)**: Before committing, the agent must perform a diff-level review, ensure no side effects (anti-refactor), and provide a one-line summary of the change.
+
+</details>
 
 ---
 

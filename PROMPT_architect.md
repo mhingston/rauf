@@ -60,13 +60,27 @@ Context Pack (task-specific evidence):
 
 ---
 
-## Phase 0b — Clarification (Interview)
+## Phase 0b — Clarification (Dynamic Interview)
 
-If the user's request is vague or underspecified, ask up to 3 clarifying questions
-focused on:
-- The interface/contract (inputs, outputs, data shapes, APIs, UI states, etc.)
-- The happy path
-- The most important edge cases
+Only ask clarifying questions if the user's request is genuinely ambiguous or missing
+critical information needed to write a complete spec.
+
+Guidelines for asking questions:
+- Ask ONLY what is necessary to define the contract and acceptance criteria
+- Tailor questions to the specific goal/topic (e.g., don't ask about API contracts for a test coverage improvement task)
+- Maximum 5 questions per iteration
+- Questions should be specific and actionable
+- If the goal is clear and well-defined, proceed directly to Phase 1
+
+Common scenarios where questions ARE needed:
+- Ambiguous scope (e.g., "add authentication" - which method? which endpoints?)
+- Missing contract details (e.g., "add API endpoint" - what's the request/response shape?)
+- Unclear success criteria (e.g., "improve performance" - by how much? measured how?)
+
+Common scenarios where questions are NOT needed:
+- Goal is self-contained (e.g., "improve test coverage to 85%")
+- Goal references existing patterns (e.g., "add similar endpoint to /users for /posts")
+- Goal is purely technical/internal (e.g., "refactor X to use Y pattern")
 
 IMPORTANT:
 - Do NOT block indefinitely waiting for answers.

@@ -85,6 +85,27 @@ var runMode = func(parentCtx context.Context, cfg modeConfig, fileCfg runtimeCon
 
 	lastResult := iterationResult{}
 
+	// Print welcome message for architect and plan modes
+	if iteration == 0 && !runner.Quiet {
+		if cfg.mode == "architect" {
+			fmt.Println(strings.Repeat("=", 70))
+			fmt.Println("🏗️  ARCHITECT MODE")
+			fmt.Println("   Creating specification from your requirements...")
+			if cfg.Goal != "" {
+				fmt.Printf("   Goal: %s\n", cfg.Goal)
+			}
+			fmt.Println("   You may be asked clarifying questions (up to 5)")
+			fmt.Println("   After completion, review and approve the spec before planning")
+			fmt.Println(strings.Repeat("=", 70) + "\n")
+		} else if cfg.mode == "plan" {
+			fmt.Println(strings.Repeat("=", 70))
+			fmt.Println("📝 PLAN MODE")
+			fmt.Println("   Generating implementation tasks from approved specs...")
+			fmt.Println("   After completion, review IMPLEMENTATION_PLAN.md before building")
+			fmt.Println(strings.Repeat("=", 70) + "\n")
+		}
+	}
+
 	startIter := time.Now()
 	iterStats := IterationStats{
 		Iteration: iteration + 1,
@@ -753,10 +774,45 @@ var runMode = func(parentCtx context.Context, cfg modeConfig, fileCfg runtimeCon
 		if iterResult.ExitReason == "completion_contract_satisfied" {
 			state.CurrentModel = "" // Reset model usage on success? Or keep?
 			saveState(state)        // Final save
+
+			// Print mode-specific advisory
+			if cfg.mode == "architect" {
+				fmt.Println("\n" + strings.Repeat("=", 70))
+				fmt.Println("📋 NEXT STEPS:")
+				fmt.Println("   1. Review the generated spec file(s) in specs/")
+				fmt.Println("   2. Edit the spec if needed to refine requirements")
+				fmt.Println("   3. Change 'status: draft' to 'status: approved' in the frontmatter")
+				fmt.Println("   4. Run 'rauf plan' to generate implementation tasks")
+				fmt.Println(strings.Repeat("=", 70))
+			} else if cfg.mode == "plan" {
+				fmt.Println("\n" + strings.Repeat("=", 70))
+				fmt.Println("📋 NEXT STEPS:")
+				fmt.Println("   1. Review IMPLEMENTATION_PLAN.md")
+				fmt.Println("   2. Edit/reorder/remove tasks as needed")
+				fmt.Println("   3. Run 'rauf' or 'rauf <N>' to start building")
+				fmt.Println(strings.Repeat("=", 70))
+			}
+
 			return iterResult, nil
 		}
 		if iterResult.ExitReason != "" {
 			saveState(state)
+
+			// Print mode-specific advisory for other exit reasons
+			if cfg.mode == "architect" && (iterResult.ExitReason == "max_iterations_reached" || iterResult.ExitReason == "no_progress") {
+				fmt.Println("\n" + strings.Repeat("=", 70))
+				fmt.Println("📋 REMINDER:")
+				fmt.Println("   - Review the generated spec file(s) in specs/")
+				fmt.Println("   - Edit as needed and set 'status: approved' to proceed")
+				fmt.Println(strings.Repeat("=", 70))
+			} else if cfg.mode == "plan" && (iterResult.ExitReason == "max_iterations_reached" || iterResult.ExitReason == "no_progress") {
+				fmt.Println("\n" + strings.Repeat("=", 70))
+				fmt.Println("📋 REMINDER:")
+				fmt.Println("   - Review IMPLEMENTATION_PLAN.md")
+				fmt.Println("   - Edit/reorder tasks as needed before running 'rauf'")
+				fmt.Println(strings.Repeat("=", 70))
+			}
+
 			return iterResult, nil
 		}
 

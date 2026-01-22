@@ -47,7 +47,7 @@ const (
 	defaultPlanIterations      = 1
 )
 
-var version = "v1.3.4"
+var version = "v1.3.5"
 
 var defaultRetryMatch = []string{"rate limit", "429", "overloaded", "timeout"}
 
@@ -264,18 +264,6 @@ func runMain(args []string) int {
 	// Or I can just check the critical ones.
 
 	harnessArgs := fileCfg.HarnessArgs
-
-	// Prompt for goal in architect mode if not provided and running interactively
-	if cfg.mode == "architect" && cfg.Goal == "" && isTerminal(os.Stdin) && !cfg.Quiet {
-		fmt.Print("What are you building? (Enter a brief description/goal): ")
-		scanner := bufio.NewScanner(os.Stdin)
-		if scanner.Scan() {
-			cfg.Goal = strings.TrimSpace(scanner.Text())
-		}
-		if cfg.Goal == "" {
-			fmt.Println("Warning: No goal provided. Architect may make assumptions about what to build.")
-		}
-	}
 
 	if len(fileCfg.Strategy) > 0 && !cfg.explicitMode {
 		if err := runStrategy(ctx, cfg, fileCfg, runner, state, gitAvailable, branch, cfg.planPath, harness, harnessArgs, fileCfg.NoPush, fileCfg.LogDir, fileCfg.RetryOnFailure, fileCfg.RetryMaxAttempts, fileCfg.RetryBackoffBase, fileCfg.RetryBackoffMax, fileCfg.RetryJitter, fileCfg.RetryMatch, os.Stdin, os.Stdout, report); err != nil {
@@ -1445,7 +1433,16 @@ func runInit(force bool, dryRun bool) error {
 		fmt.Println("No files created.")
 	}
 	if !dryRun {
-		fmt.Println("Next: update AGENTS.md with repo-specific commands.")
+		fmt.Println("\n" + strings.Repeat("=", 70))
+		fmt.Println("📋 NEXT STEPS:")
+		fmt.Println("   1. Edit AGENTS.md with your repo-specific commands")
+		fmt.Println("      (test, lint, build, verify commands)")
+		fmt.Println("   2. Review and customize rauf.yaml if needed")
+		fmt.Println("   3. Run: rauf architect \"<your feature description>\"")
+		fmt.Println("      Example: rauf architect \"add user authentication\"")
+		fmt.Println("\n💡 WORKFLOW:")
+		fmt.Println("   architect → review spec → approve → plan → review tasks → build")
+		fmt.Println(strings.Repeat("=", 70))
 	}
 	return nil
 }
@@ -1556,13 +1553,27 @@ Repo map (truncated):
 
 ---
 
-## Phase 0b — Clarification (Interview)
+## Phase 0b — Clarification (Dynamic Interview)
 
-If the user's request is vague or underspecified, ask up to 3 clarifying questions
-focused on:
-- The interface/contract (inputs, outputs, data shapes, APIs, UI states, etc.)
-- The happy path
-- The most important edge cases
+Only ask clarifying questions if the user's request is genuinely ambiguous or missing
+critical information needed to write a complete spec.
+
+Guidelines for asking questions:
+- Ask ONLY what is necessary to define the contract and acceptance criteria
+- Tailor questions to the specific goal/topic (e.g., don't ask about API contracts for a test coverage improvement task)
+- Maximum 5 questions per iteration
+- Questions should be specific and actionable
+- If the goal is clear and well-defined, proceed directly to Phase 1
+
+Common scenarios where questions ARE needed:
+- Ambiguous scope (e.g., "add authentication" - which method? which endpoints?)
+- Missing contract details (e.g., "add API endpoint" - what's the request/response shape?)
+- Unclear success criteria (e.g., "improve performance" - by how much? measured how?)
+
+Common scenarios where questions are NOT needed:
+- Goal is self-contained (e.g., "improve test coverage to 85%")
+- Goal references existing patterns (e.g., "add similar endpoint to /users for /posts")
+- Goal is purely technical/internal (e.g., "refactor X to use Y pattern")
 
 IMPORTANT:
 - Do NOT block indefinitely waiting for answers.
